@@ -13,7 +13,7 @@ All three come from wellisearch — it wraps both search providers and page craw
   - `num_results` (optional, default 5; pass `10` for the full list).
   - `max_age_days` (optional — ignore locally-indexed pages crawled more than N days ago; use for fast-moving topics).
   - `max_crawl` (optional — how many result URLs wellisearch indexes in the background on a miss; default 5, leave it alone).
-  Returns a `results` Markdown block (Title/URL/Snippet, `---` separated) plus metadata: `source` (`local` | `tavily` | `brave` | `searxng`), `degraded` (bool), `count`, and `last_crawled` dates for local hits.
+  Returns a `results` Markdown block (Title/URL/Snippet, `---` separated) plus metadata: `source` (`local` | `tavily` | `brave` | `exa`), `degraded` (bool), `count`, and `last_crawled` dates for local hits.
 - `fetch_page` — read one URL as clean Markdown. Parameters: `url` (required), `max_chars` (optional cap). Returns `{ok, url, title, markdown}`. Indexed pages return instantly from the local index; unknown URLs are crawled on demand and stored — the first read of a new URL can take a few seconds.
 - `fetch_pages` — read several URLs in ONE call under a shared total character budget. Parameters: `urls` (required, array), `max_chars` (optional total budget — omit for full content), `per_page_chars` (optional per-page cap), `strategy` (optional: `smart` default, `head`, `tail`, `even`, `priority`). Returns one combined Markdown document, one clearly delimited section per page (URL/Title/---/content); each trimmed page carries a `[truncated — N chars omitted, strategy=X]` marker — treat trimmed content as incomplete.
 
