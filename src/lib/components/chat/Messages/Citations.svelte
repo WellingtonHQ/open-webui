@@ -10,8 +10,35 @@
 	export let chatId = '';
 
 	export let sources = [];
+	export let content = '';
 	export let readOnly = false;
 
+	/**
+	 * Extract the [n] indices actually cited in the message text (mirrors the marked
+	 * citation-extension tokenizer: adjacent [1], [1,2#x] blocks; footnotes ignored).
+	 */
+	const extractCitedIndices = (text: string) => {
+		const indices = new Set<number>();
+
+		if (!text) return indices;
+
+		// Ignore code fences, inline code and markdown link syntax so only rendered [n] chips count.
+		const plain = text
+			.replace(/```[\s\S]*?(```|$)/g, '')
+			.replace(/`[^`\n]*`/g, '')
+			.replace(/\[[^\]]*\]\([^)]*\)/g, '');
+
+		for (const group of plain.matchAll(/\[([^\]]+)\]/g)) {
+			for (const part of group[1].split(',')) {
+				const match = /^\s*(\d+)(?:#.+)?$/.exec(part);
+				if (match) indices.add(parseInt(match[1], 10));
+			}
+		}
+
+		return indices;
+	};
+
+	let allCitations = [];
 	let citations = [];
 	let showPercentage = false;
 	let showRelevance = true;
@@ -38,11 +65,13 @@
 			index = sourceId - 1;
 		}
 
-		if (citations[index]) {
-			console.log('Showing citation modal for:', citations[index]);
+		const citationEntry = allCitations[index];
 
-			if (citations[index]?.source?.embed_url) {
-				const embedUrl = citations[index].source.embed_url;
+		if (citationEntry) {
+			console.log('Showing citation modal for:', citationEntry);
+
+			if (citationEntry?.source?.embed_url) {
+				const embedUrl = citationEntry.source.embed_url;
 				if (embedUrl) {
 					if (readOnly) {
 						// Open in new tab if readOnly
@@ -53,19 +82,19 @@
 						showEmbeds.set(true);
 						embed.set({
 							url: embedUrl,
-							title: citations[index]?.source?.name || 'Embedded Content',
-							source: citations[index],
+							title: citationEntry?.source?.name || 'Embedded Content',
+							source: citationEntry,
 							chatId: chatId,
 							messageId: id,
 							sourceId: sourceId
 						});
 					}
 				} else {
-					selectedCitation = citations[index];
+					selectedCitation = citationEntry;
 					showCitationModal = true;
 				}
 			} else {
-				selectedCitation = citations[index];
+				selectedCitation = citationEntry;
 				showCitationModal = true;
 			}
 		}
@@ -95,8 +124,11 @@
 		return distances.every((d) => d !== undefined && d >= -1 && d <= 1);
 	}
 
+	const isUrlSourceId = (value: unknown) =>
+		typeof value === 'string' && (value.startsWith('http://') || value.startsWith('https://'));
+
 	$: {
-		citations = sources.reduce((acc, source) => {
+		allCitations = sources.reduce((acc, source) => {
 			if (Object.keys(source).length === 0) {
 				return acc;
 			}
@@ -113,7 +145,7 @@
 					_source = { ..._source, name: metadata.name };
 				}
 
-				if (id.startsWith('http://') || id.startsWith('https://')) {
+				if (isUrlSourceId(id)) {
 					_source = { ..._source, name: id, url: id };
 				}
 
@@ -129,17 +161,23 @@
 						source: _source,
 						document: [document],
 						metadata: metadata ? [metadata] : [],
-						distances: distance !== undefined ? [distance] : []
+						distances: distance !== undefined ? [distance] : [],
+						pos: acc.length + 1 // 1-based position matching the model's [n] citations
 					});
 				}
 			});
 
 			return acc;
 		}, []);
+
+		// Web (http) sources only show up when the model actually cited them in its answer
+		// ([n]); non-web sources (knowledge files, etc.) keep their existing "show all" behavior.
+		const cited = extractCitedIndices(content);
+		citations = allCitations.filter((item) => !isUrlSourceId(item.id) || cited.has(item.pos));
 		console.log('citations', citations);
 
-		showRelevance = calculateShowRelevance(citations);
-		showPercentage = shouldShowPercentage(citations);
+		showRelevance = calculateShowRelevance(allCitations);
+		showPercentage = shouldShowPercentage(allCitations);
 	}
 
 	const decodeString = (str: string) => {
@@ -212,9 +250,9 @@
 {#if showCitations}
 	<div class="py-1.5">
 		<div class="text-xs gap-2 flex flex-col">
-			{#each citations as citation, idx}
+			{#each citations as citation (citation.id)}
 				<button
-					id={`source-${id}-${idx + 1}`}
+					id={`source-${id}-${citation.pos}`}
 					aria-label={$i18n.t('View source: {{name}}', {
 						name: decodeString(citation.source.name)
 					})}
@@ -225,7 +263,7 @@
 					}}
 				>
 					<div class=" font-normal bg-gray-50 dark:bg-gray-850 rounded-md px-1">
-						{idx + 1}
+						{citation.pos}
 					</div>
 					<div
 						class="flex-1 truncate hover:text-black dark:text-white/60 dark:hover:text-white transition text-left"

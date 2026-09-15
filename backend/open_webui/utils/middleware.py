@@ -387,8 +387,72 @@ def _split_tool_calls(
     return expanded
 
 
+def _collect_url_entries(text: str) -> list[dict]:
+    """Collect Title:/URL: result blocks from a tool's text output (e.g. wellisearch MCP
+    markdown documents). Each entry is {'title': str, 'url': str, 'lines': list[str]}."""
+    entries = []
+    current_title = ''
+
+    if isinstance(text, str):
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+
+            title_match = re.match(r'^Title:\s*(.+)$', line)
+            if title_match:
+                current_title = title_match.group(1).strip()
+                continue
+
+            url_match = re.match(r'^(?:URL|Url|url):\s*(https?://\S+?)\s*$', line)
+            if url_match:
+                entries.append({'title': current_title, 'url': url_match.group(1), 'lines': []})
+                current_title = ''
+                continue
+
+            snippet_match = re.match(r'^Snippet:\s*(.+)$', line, flags=re.IGNORECASE)
+            if snippet_match and entries:
+                entries[-1]['lines'].append(snippet_match.group(1).strip())
+                continue
+
+            # Skip other header lines (Source:, Time:, ...) and rule separators; keep body text as snippet.
+            if re.match(r'^[A-Za-z][\w ]*:', line) or set(line) <= {'-', '='}:
+                continue
+
+            if entries:
+                entries[-1]['lines'].append(line)
+
+    return entries
+
+
+def _build_url_citation_sources(entries: list[dict], label: str = 'web_sources') -> list[dict]:
+    """Build citation source dicts from URL entries, one document per URL."""
+    documents = []
+    metadata = []
+    for e in entries:
+        snippet = '\n'.join(e['lines']).strip()[:500]
+        doc = f'{e["title"]}\n{e["url"]}'.lstrip() + (f'\n\n{snippet}' if snippet else '')
+        documents.append(doc)
+        metadata.append({'source': e['url'], 'name': e['title'] or e['url'], 'url': e['url']})
+
+    return [
+        {
+            'source': {'name': label, 'id': label},
+            'document': documents,
+            'metadata': metadata,
+        }
+    ]
+
+
+def _parse_markdown_url_citations(text: str, label: str = 'web_sources') -> list[dict]:
+    """Parse Title:/URL: result blocks from a tool's text output into citation source dicts.
+
+    Returns [] when no URL block is found in the text.
+    """
+    entries = _collect_url_entries(text)
+    return _build_url_citation_sources(entries, label) if entries else []
+
+
 def get_citation_source_from_tool_result(
-    tool_name: str, tool_params: dict, tool_result: str, tool_id: str = ''
+    tool_name: str, tool_params: dict, tool_result: str, tool_id: str = '', tool_type: str = ''
 ) -> list[dict]:
     """
     Parse a tool's result and convert it to source dicts for citation display.
@@ -533,6 +597,14 @@ def get_citation_source_from_tool_result(
 
             # Empty result fallback
             return []
+
+        elif tool_type == 'mcp':
+            # MCP tools (e.g. wellisearch) return markdown documents with Title:/URL: blocks.
+            # Parse them into per-URL citations so they appear in the sources UI like search_web results.
+            text = tool_result if isinstance(tool_result, str) else JSONCodec.dumps(tool_result)
+            return _parse_markdown_url_citations(
+                text, label=f'{tool_id}/{tool_name}' if tool_id else tool_name
+            )
 
         else:
             # Fallback for other tools
@@ -1493,22 +1565,36 @@ async def chat_completion_tools_handler(
 
                     tool_name = f'{tool_id}/{tool_function_name}' if tool_id else f'{tool_function_name}'
 
-                    # Citation is enabled for this tool
-                    sources.append(
-                        {
-                            'source': {
-                                'name': (f'{tool_name}'),
-                            },
-                            'document': [str(tool_result)],
-                            'metadata': [
-                                {
-                                    'source': (f'{tool_name}'),
-                                    'parameters': tool_function_params,
-                                }
-                            ],
-                            'tool_result': True,
-                        }
+                    parsed_sources = (
+                        _parse_markdown_url_citations(
+                            tool_result if isinstance(tool_result, str) else JSONCodec.dumps(tool_result),
+                            label=tool_name,
+                        )
+                        if tool_type == 'mcp'
+                        else []
                     )
+                    if parsed_sources:
+                        for source in parsed_sources:
+                            source['tool_result'] = True
+                        sources.extend(parsed_sources)
+
+                    # Citation is enabled for this tool
+                    else:
+                        sources.append(
+                            {
+                                'source': {
+                                    'name': (f'{tool_name}'),
+                                },
+                                'document': [str(tool_result)],
+                                'metadata': [
+                                    {
+                                        'source': (f'{tool_name}'),
+                                        'parameters': tool_function_params,
+                                    }
+                                ],
+                                'tool_result': True,
+                            }
+                        )
 
                     if tools[tool_function_name].get('metadata', {}).get('file_handler', False):
                         skip_files = True
@@ -5805,18 +5891,21 @@ async def streaming_chat_response_handler(response, ctx):
                             event_emitter,
                         )
 
-                        # Extract citation sources from tool results
+                        # Extract citation sources from tool results (builtins plus MCP tools that return URL result blocks)
                         if (
                             citations_enabled
-                            and tool_function_name
-                            in [
-                                'search_web',
-                                'fetch_url',
-                                'view_file',
-                                'view_knowledge_file',
-                                'query_knowledge_files',
-                                'query_chat_files',
-                            ]
+                            and (
+                                tool_function_name
+                                in [
+                                    'search_web',
+                                    'fetch_url',
+                                    'view_file',
+                                    'view_knowledge_file',
+                                    'query_knowledge_files',
+                                    'query_chat_files',
+                                ]
+                                or tool_type == 'mcp'
+                            )
                             and tool_result
                         ):
                             try:
@@ -5825,6 +5914,7 @@ async def streaming_chat_response_handler(response, ctx):
                                     tool_params=tool_function_params,
                                     tool_result=tool_result,
                                     tool_id=tool.get('tool_id', '') if tool else '',
+                                    tool_type=tool_type,
                                 )
                                 tool_call_sources.extend(citation_sources)
                             except Exception as e:

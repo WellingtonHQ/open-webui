@@ -132,7 +132,7 @@ output at all**. Check:
 ## Upgrade the OpenWebUI app itself
 
 Not an image bump: `wellington/sync.sh --rebase` / `.\wellington\sync.ps1 -Rebase`
-(rebase onto `upstream/main`, resolve conflicts in the 12 core files listed in
+(rebase onto `upstream/main`, resolve conflicts in the 14 core files listed in
 `README.md`), then rebuild:
 
 ```bash

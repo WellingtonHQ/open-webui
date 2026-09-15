@@ -899,6 +899,7 @@
 									bind:this={citationsElement}
 									id={message?.id}
 									{chatId}
+									content={typeof message?.content === 'string' ? message.content : ''}
 									sources={message?.sources ?? message?.citations}
 									{readOnly}
 								/>

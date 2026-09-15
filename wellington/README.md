@@ -52,7 +52,7 @@ entire sync-conflict surface. Preserve them on every rebase.
 | File | Change |
 | --- | --- |
 | `Dockerfile` | `NODE_OPTIONS=--max-old-space-size=8192` (SvelteKit build heap bump) |
-| `backend/open_webui/utils/middleware.py` | Crawl4AI markdown-surfacing fix |
+| `backend/open_webui/utils/middleware.py` | Crawl4AI markdown-surfacing fix + MCP tool-result citation parsing (see below) |
 | `backend/open_webui/models/automations.py` | persistent-chat automation |
 | `backend/open_webui/utils/automations.py` | persistent-chat automation logic |
 | `backend/open_webui/routers/tasks.py` | automation / title-generation task wiring |
@@ -62,6 +62,8 @@ entire sync-conflict surface. Preserve them on every rebase.
 | `src/lib/components/automations/ChatTargetDropdown.svelte` | chat-target picker (new file) |
 | `src/lib/components/common/Select.svelte` | select component tweak |
 | `src/lib/components/layout/Sidebar/ChatItem.svelte` | generated-title display |
+| `src/lib/components/chat/Messages/Citations.svelte` | cited-only filter for web sources (see below) |
+| `src/lib/components/chat/Messages/ResponseMessage.svelte` | passes message text into Citations |
 | `src/lib/i18n/locales/en-US/translation.json` | i18n strings |
 
 > Note: `requirements.txt`, `backend/open_webui/retrieval/web/utils.py`,
@@ -69,6 +71,27 @@ entire sync-conflict surface. Preserve them on every rebase.
 > `src/lib/components/admin/Settings/WebSearch.svelte` were **reverted to pristine
 > upstream** (the earlier Scrapling web-fetcher was removed). They no longer count
 > against the conflict surface.
+
+### MCP sources — cited-only display
+
+Web search now runs on an MCP server (see `skills/search_the_web.md`) instead of the
+built-in `search_web` tool, but citations only existed for built-in tools — so answers
+that used it showed no Sources list at all. The table rows above restore that:
+
+- **Backend** (`get_citation_source_from_tool_result`, MCP branch; helpers
+  `_collect_url_entries` / `_build_url_citation_sources` / `_parse_markdown_url_citations`):
+  any result with `tool_type == 'mcp'` is scanned for wellisearch-style markdown blocks
+  (`Title:` / `URL:` / `Snippet:`) and turned into one citation per URL, labeled
+  `<server>/<tool>`. The gate keys on the MCP tool *type*, not a specific server: any other
+  MCP tool that returns the same block format gets citations for free. Tools with a
+  different result shape deliberately get **no** citations rather than guessed ones — add a
+  small adapter branch per tool if one of them needs sources (generic "extract every URL"
+  was rejected to avoid false positives and `[n]` positional drift).
+- **Frontend** (`Citations.svelte`, plus the `content` prop in `ResponseMessage.svelte`):
+  for URL sources, the Sources pill + expandable list show **only the URLs the model
+  actually cited** as `[n]` in its answer; the pill is hidden entirely when it cites
+  nothing. The unfiltered list still drives positional chip lookups (clicking a `[n]` opens
+  that source). Knowledge-base / file sources keep their original show-all behavior.
 
 ---
 
@@ -203,14 +226,14 @@ Or manually:
 ```bash
 git fetch upstream
 git rebase upstream/main
-# resolve conflicts in the 12 core files listed above, then:
+# resolve conflicts in the 14 core files listed above, then:
 git rebase --continue
 ```
 
 **Why this stays easy:**
 - All custom assets are in `wellington/` (untracked-by-upstream), so upstream never
   conflicts with them.
-- Only the 12 core files above can conflict, and each change is small and localized.
+- Only the 14 core files above can conflict, and each change is small and localized.
 - The helper refuses a dirty tree unless you explicitly `--force`/`-Force`
   (it then stashes and restores your uncommitted work).
 
