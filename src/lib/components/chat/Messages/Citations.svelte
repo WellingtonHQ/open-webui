@@ -14,6 +14,40 @@
 	export let readOnly = false;
 
 	/**
+	 * Canonical form for comparing a URL mentioned in the message text against a stored
+	 * source id. Models often rewrite URLs slightly (date dashes vs slashes, dropped query
+	 * strings, trailing slashes), so compare on host+path with all punctuation removed.
+	 */
+	const normalizeUrl = (value: string) =>
+		value
+			.toLowerCase()
+			.replace(/^https?:\/\//, '')
+			.replace(/^www\./, '')
+			.split(/[?#]/)[0]
+			.replace(/\/+$/, '')
+			.replace(/[^a-z0-9]/g, '');
+
+	/**
+	 * Extract URLs mentioned directly in the message text. Models that write a prose
+	 * "Sources" list instead of [n] chips still count as having cited those URLs.
+	 */
+	const extractCitedUrls = (text: string) => {
+		const urls = new Set<string>();
+
+		if (!text) return urls;
+
+		const plain = text
+			.replace(/```[\s\S]*?(```|$)/g, '')
+			.replace(/`[^`\n]*`/g, '');
+
+		for (const match of plain.matchAll(/https?:\/\/[^\s<>"')\]]+/g)) {
+			urls.add(normalizeUrl(match[0].replace(/[.,;:!?)\]}'"]+$/, '')));
+		}
+
+		return urls;
+	};
+
+	/**
 	 * Extract the [n] indices actually cited in the message text (mirrors the marked
 	 * citation-extension tokenizer: adjacent [1], [1,2#x] blocks; footnotes ignored).
 	 */
@@ -170,10 +204,14 @@
 			return acc;
 		}, []);
 
-		// Web (http) sources only show up when the model actually cited them in its answer
-		// ([n]); non-web sources (knowledge files, etc.) keep their existing "show all" behavior.
+		// Web (http) sources only show up when the model actually cited them in its answer —
+		// either as a [n] chip or by naming the URL directly; non-web sources (knowledge files,
+		// etc.) keep their existing "show all" behavior.
 		const cited = extractCitedIndices(content);
-		citations = allCitations.filter((item) => !isUrlSourceId(item.id) || cited.has(item.pos));
+		const citedUrls = extractCitedUrls(content);
+		citations = allCitations.filter(
+			(item) => !isUrlSourceId(item.id) || cited.has(item.pos) || (citedUrls.size > 0 && citedUrls.has(normalizeUrl(item.id))),
+		);
 		console.log('citations', citations);
 
 		showRelevance = calculateShowRelevance(allCitations);

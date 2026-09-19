@@ -464,7 +464,7 @@ def get_citation_source_from_tool_result(
 
     Returns a list of sources (usually one, but query_knowledge_files/query_chat_files may return multiple).
     """
-    _EXPECTS_LIST = {'search_web', 'query_knowledge_files', 'query_chat_files'}
+    _EXPECTS_LIST = {'query_knowledge_files', 'query_chat_files'}
     _EXPECTS_DICT = {'view_knowledge_file', 'view_file'}
 
     try:
@@ -475,6 +475,23 @@ def get_citation_source_from_tool_result(
         if isinstance(tool_result, dict) and 'error' in tool_result:
             return []
 
+        # Unwrap the {'results': [...]} wrapper that process_tool_result adds to
+        # list-shaped tool results (e.g. OpenAPI servers returning content blocks).
+        if (
+            isinstance(tool_result, dict)
+            and set(tool_result.keys()) == {'results'}
+            and isinstance(tool_result['results'], list)
+        ):
+            tool_result = tool_result['results']
+
+        # Flatten MCP-style content block lists ([{"type": "text", "text": ...}]) to plain text.
+        if (
+            isinstance(tool_result, list)
+            and len(tool_result) > 0
+            and all(isinstance(item, dict) and item.get('type') in ('text', 'input_text') for item in tool_result)
+        ):
+            tool_result = '\n'.join(str(item.get('text', '')) for item in tool_result)
+
         # Validate tool_result type based on what the branch expects
         if tool_name in _EXPECTS_LIST and not isinstance(tool_result, list):
             return []
@@ -482,6 +499,12 @@ def get_citation_source_from_tool_result(
             return []
 
         if tool_name == 'search_web':
+            # External servers (e.g. wellisearch via OpenAPI) reuse the search_web name but return
+            # markdown result blocks instead of a JSON array — parse those into per-URL citations.
+            if not isinstance(tool_result, list):
+                text = tool_result if isinstance(tool_result, str) else JSONCodec.dumps(tool_result)
+                return _parse_markdown_url_citations(text, label='search_web')
+
             # Parse JSON array: [{"title": "...", "link": "...", "snippet": "..."}]
             results = tool_result
             documents = []
@@ -598,8 +621,8 @@ def get_citation_source_from_tool_result(
             # Empty result fallback
             return []
 
-        elif tool_type == 'mcp':
-            # MCP tools (e.g. wellisearch) return markdown documents with Title:/URL: blocks.
+        elif tool_type in ('mcp', 'openapi'):
+            # MCP / OpenAPI tool servers (e.g. wellisearch) return markdown documents with Title:/URL: blocks.
             # Parse them into per-URL citations so they appear in the sources UI like search_web results.
             text = tool_result if isinstance(tool_result, str) else JSONCodec.dumps(tool_result)
             return _parse_markdown_url_citations(
@@ -5891,7 +5914,7 @@ async def streaming_chat_response_handler(response, ctx):
                             event_emitter,
                         )
 
-                        # Extract citation sources from tool results (builtins plus MCP tools that return URL result blocks)
+                        # Extract citation sources from tool results (builtins plus MCP/OpenAPI URL result blocks)
                         if (
                             citations_enabled
                             and (
@@ -5904,7 +5927,7 @@ async def streaming_chat_response_handler(response, ctx):
                                     'query_knowledge_files',
                                     'query_chat_files',
                                 ]
-                                or tool_type == 'mcp'
+                                or tool_type in ('mcp', 'openapi')
                             )
                             and tool_result
                         ):
