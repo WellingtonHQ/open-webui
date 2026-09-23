@@ -39,7 +39,7 @@ services:
       # Limits CPU threads to prevent it from starving your LLM
       - OMP_NUM_THREADS=4
       - DOCLING_API_KEY=${DOCLING_API_KEY}
-    mem_limit: 2G 
+    mem_limit: 4G 
     ports:
       - "3001:5001"
 
