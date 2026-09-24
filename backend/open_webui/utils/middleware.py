@@ -1034,9 +1034,17 @@ def handle_responses_streaming_event(
         return current_output, None
 
 
+def _is_http_url(value) -> bool:
+    return str(value).startswith(('http://', 'https://'))
+
+
 def get_source_context(sources: list, source_ids: dict = None, include_content: bool = True) -> str:
     """
     Build <source> tag context string from citation sources.
+
+    When include_content is False, each tag carries a compact "title — URL"
+    identifier instead of the document body so the model can map source ids to
+    real pages without duplicating full content in context.
     """
     context_string = ''
     if source_ids is None:
@@ -1049,7 +1057,15 @@ def get_source_context(sources: list, source_ids: dict = None, include_content: 
             src_name = source.get('source', {}).get('name')
             src_type = source.get('source', {}).get('type')
             src_rid = source.get('source', {}).get('id')
-            body = doc if include_content else ''
+            if include_content:
+                body = doc
+            else:
+                url = str(meta.get('url') or '')
+                if not _is_http_url(url) and _is_http_url(source_id):
+                    url = str(source_id)
+                name = str(meta.get('name') or '')
+                parts = ([name] if name and name != url else []) + ([url] if url else [])
+                body = ' — '.join(parts)
             context_string += (
                 f'<source id="{source_ids[source_id]}"'
                 + (f' name="{src_name}"' if src_name else '')
@@ -6023,8 +6039,8 @@ async def streaming_chat_response_handler(response, ctx):
                             else:
                                 replace_system_message_content('', form_data['messages'])
 
-                            # Build context: file sources with content,
-                            # tool sources as citation markers only.
+                            # Build context: file sources with full content,
+                            # tool sources as compact id -> title/URL markers.
                             source_ids = {}
                             source_context = get_source_context(
                                 metadata.get('sources', []), source_ids
