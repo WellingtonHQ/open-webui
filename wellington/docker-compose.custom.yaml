@@ -37,9 +37,9 @@ services:
     restart: always
     environment:
       # Limits CPU threads to prevent it from starving your LLM
-      - OMP_NUM_THREADS=4
+      - OMP_NUM_THREADS=6
       - DOCLING_API_KEY=${DOCLING_API_KEY}
-    mem_limit: 4G 
+    mem_limit: 6G 
     ports:
       - "3001:5001"
 
