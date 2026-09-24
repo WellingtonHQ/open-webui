@@ -3,6 +3,7 @@ import csv
 import logging
 import os
 import sys
+import time
 import zipfile
 
 import ftfy
@@ -235,7 +236,14 @@ class TikaLoader:
             raise Exception(f'Error calling Tika: {r.reason}')
 
 
+class _DoclingAsyncEndpointUnavailable(Exception):
+    """Raised when the docling server does not expose /v1/convert/file/async."""
+
+
 class DoclingLoader:
+    POLL_INTERVAL_SECONDS = 15
+    MAX_POLL_ITERATIONS = 200  # keep polling for up to 30 minutes
+
     def __init__(self, url, api_key=None, file_path=None, mime_type=None, params=None):
         self.url = url.rstrip('/')
         self.api_key = api_key
@@ -244,13 +252,128 @@ class DoclingLoader:
 
         self.params = params or {}
 
+    def _headers(self) -> dict:
+        headers = {}
+        if self.api_key:
+            headers['X-Api-Key'] = f'{self.api_key}'
+        return headers
+
+    @staticmethod
+    def _error_from_response(r) -> Exception:
+        error_msg = f'Error calling Docling API: {r.reason}'
+        if r.text:
+            try:
+                error_data = r.json()
+                if 'detail' in error_data:
+                    error_msg += f' - {error_data["detail"]}'
+            except Exception:
+                error_msg += f' - {r.text}'
+        return Exception(f'Error calling Docling: {error_msg}')
+
     def load(self) -> list[Document]:
         page_break_marker = '\f'
-        with open(self.file_path, 'rb') as f:
-            headers = {}
-            if self.api_key:
-                headers['X-Api-Key'] = f'{self.api_key}'
+        form_data = {
+            'image_export_mode': 'placeholder',
+            'md_page_break_placeholder': page_break_marker,
+            # Keep Docling params as user-provided form values. Encoding nested
+            # values here would make Open WebUI responsible for Docling's API
+            # quirks and could break when Docling changes its form contract.
+            **self.params,
+        }
 
+        try:
+            md_content = self._convert_async(form_data)
+        except _DoclingAsyncEndpointUnavailable:
+            log.debug('Docling server has no async endpoint, falling back to sync conversion')
+            md_content = self._convert_sync(form_data)
+
+        text = md_content or '<No text content found>'
+
+        metadata = {'Content-Type': self.mime_type} if self.mime_type else {}
+        if page_break_marker in md_content:
+            documents = [
+                Document(page_content=page.strip(), metadata={**metadata, 'page': page_idx})
+                for page_idx, page in enumerate(md_content.split(page_break_marker))
+                if page.strip()
+            ]
+            if documents:
+                log.debug('Docling extracted text: %s', text)
+                return documents
+
+        log.debug('Docling extracted text: %s', text)
+        return [Document(page_content=text, metadata=metadata)]
+
+    def _convert_async(self, form_data: dict) -> str:
+        """Submit the file to /v1/convert/file/async and poll until it finishes.
+
+        The sync endpoint gives up after DOCLING_SERVE_MAX_SYNC_WAIT (default 120s),
+        so OCR-heavy documents would fail even though docling itself succeeds.
+        """
+        with open(self.file_path, 'rb') as f:
+            r = requests.post(
+                f'{self.url}/v1/convert/file/async',
+                files={
+                    'files': (
+                        self.file_path,
+                        f,
+                        self.mime_type or 'application/octet-stream',
+                    )
+                },
+                data=form_data,
+                headers=self._headers(),
+                verify=AIOHTTP_CLIENT_SESSION_SSL,
+                timeout=300,
+            )
+
+        if r.status_code in (404, 405):
+            raise _DoclingAsyncEndpointUnavailable()
+        if not r.ok:
+            raise self._error_from_response(r)
+
+        task_id = r.json().get('task_id')
+        if not task_id:
+            raise Exception(f'Error calling Docling API: missing task_id in response - {r.text[:200]}')
+
+        for iteration in range(self.MAX_POLL_ITERATIONS):
+            status_response = requests.get(
+                f'{self.url}/v1/status/poll/{task_id}',
+                headers=self._headers(),
+                verify=AIOHTTP_CLIENT_SESSION_SSL,
+                timeout=30,
+            )
+            if not status_response.ok:
+                raise self._error_from_response(status_response)
+
+            status_data = status_response.json()
+            task_status = status_data.get('task_status')
+            if task_status in ('success', 'partial_success'):
+                break
+            if task_status in ('failure', 'skipped'):
+                detail = status_data.get('error_message') or status_data.get('failure') or task_status
+                raise Exception(f'Error calling Docling API: {detail}')
+
+            if iteration % 2 == 0:
+                log.info('Docling conversion in progress (task %s, status: %s)', task_id, task_status)
+            time.sleep(self.POLL_INTERVAL_SECONDS)
+        else:
+            raise Exception(
+                f'Error calling Docling API: conversion did not finish within '
+                f'{self.MAX_POLL_ITERATIONS * self.POLL_INTERVAL_SECONDS // 60} minutes (task {task_id})'
+            )
+
+        result_response = requests.get(
+            f'{self.url}/v1/result/{task_id}',
+            headers=self._headers(),
+            verify=AIOHTTP_CLIENT_SESSION_SSL,
+            timeout=60,
+        )
+        if not result_response.ok:
+            raise self._error_from_response(result_response)
+
+        return (result_response.json().get('document') or {}).get('md_content', '')
+
+    def _convert_sync(self, form_data: dict) -> str:
+        with open(self.file_path, 'rb') as f:
             r = requests.post(
                 f'{self.url}/v1/convert/file',
                 files={
@@ -260,46 +383,15 @@ class DoclingLoader:
                         self.mime_type or 'application/octet-stream',
                     )
                 },
-                data={
-                    'image_export_mode': 'placeholder',
-                    'md_page_break_placeholder': page_break_marker,
-                    # Keep Docling params as user-provided form values. Encoding nested
-                    # values here would make Open WebUI responsible for Docling's API
-                    # quirks and could break when Docling changes its form contract.
-                    **self.params,
-                },
-                headers=headers,
+                data=form_data,
+                headers=self._headers(),
                 verify=AIOHTTP_CLIENT_SESSION_SSL,
+                timeout=600,
             )
-        if r.ok:
-            result = r.json()
-            document_data = result.get('document', {})
-            md_content = document_data.get('md_content', '')
-            text = md_content or '<No text content found>'
+        if not r.ok:
+            raise self._error_from_response(r)
 
-            metadata = {'Content-Type': self.mime_type} if self.mime_type else {}
-            if page_break_marker in md_content:
-                documents = [
-                    Document(page_content=page.strip(), metadata={**metadata, 'page': page_idx})
-                    for page_idx, page in enumerate(md_content.split(page_break_marker))
-                    if page.strip()
-                ]
-                if documents:
-                    log.debug('Docling extracted text: %s', text)
-                    return documents
-
-            log.debug('Docling extracted text: %s', text)
-            return [Document(page_content=text, metadata=metadata)]
-        else:
-            error_msg = f'Error calling Docling API: {r.reason}'
-            if r.text:
-                try:
-                    error_data = r.json()
-                    if 'detail' in error_data:
-                        error_msg += f' - {error_data["detail"]}'
-                except Exception:
-                    error_msg += f' - {r.text}'
-            raise Exception(f'Error calling Docling: {error_msg}')
+        return (r.json().get('document') or {}).get('md_content', '')
 
 
 class Loader:
