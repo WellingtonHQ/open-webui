@@ -4,7 +4,7 @@
 
 	import { tick, getContext, onMount } from 'svelte';
 
-	const i18n = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
 	import { config, mobile, settings, socket, user } from '$lib/stores';
 	import {
@@ -126,7 +126,7 @@
 				}
 			}
 
-			text = text.replaceAll('{{CLIPBOARD}}', clipboardText.replaceAll('\r\n', '\n'));
+			text = text.replaceAll('{{CLIPBOARD}}', () => clipboardText.replaceAll('\r\n', '\n'));
 		}
 
 		if (text.includes('{{USER_LOCATION}}')) {
@@ -630,7 +630,10 @@
 				command: ({ editor, range, props }) => {
 					// Convert the Unicode hex codepoint (e.g. "1F44B") to the actual emoji character (👋)
 					const codepoint = props.id;
-					const emoji = String.fromCodePoint(parseInt(codepoint, 16));
+					const emoji = codepoint
+						.split('-')
+						.map((cp) => String.fromCodePoint(parseInt(cp, 16)))
+						.join('');
 					editor.chain().focus().deleteRange(range).insertContent(emoji).run();
 				},
 				render: getSuggestionRenderer(CommandSuggestionList, {
@@ -940,19 +943,17 @@
 															navigator.msMaxTouchPoints > 0
 														)
 													) {
-														// Prevent Enter key from creating a new line
 														// Uses keyCode '13' for Enter key for chinese/japanese keyboards
-														if (e.keyCode === 13 && !e.shiftKey) {
-															e.preventDefault();
-														}
+														const enterPressed =
+															($settings?.ctrlEnterToSend ?? false)
+																? (e.key === 'Enter' || e.keyCode === 13) && isCtrlPressed
+																: (e.key === 'Enter' || e.keyCode === 13) && !e.shiftKey;
 
-														// Submit the content when Enter key is pressed
-														if (
-															(content !== '' || files.length > 0) &&
-															e.keyCode === 13 &&
-															!e.shiftKey
-														) {
-															submitHandler();
+														if (enterPressed) {
+															e.preventDefault();
+															if (content !== '' || files.length > 0) {
+																submitHandler();
+															}
 														}
 													}
 												}
@@ -997,7 +998,7 @@
 													id="input-menu-button"
 													class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
 													type="button"
-													aria-label="More"
+													aria-label={$i18n.t('More')}
 												>
 													<svg
 														xmlns="http://www.w3.org/2000/svg"
@@ -1048,7 +1049,7 @@
 														toast.error($i18n.t('Permission denied when accessing microphone'));
 													}
 												}}
-												aria-label="Voice Input"
+												aria-label={$i18n.t('Voice Input')}
 											>
 												<svg
 													xmlns="http://www.w3.org/2000/svg"
