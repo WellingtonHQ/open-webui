@@ -19,7 +19,7 @@ All three come from wellisearch — it wraps both search providers and page craw
 
 ## Workflow
 
-1. **Search** — call `search_web` with a concise query and `num_results: 10`. It returns up to 10 candidate links (title, URL, snippet) — no page content.
+1. **Search** — call `search_web` with a concise query and `num_results: 5`. It returns up to 5 candidate links (title, URL, snippet) — no page content.
    - Use 1–3 precise keywords; add a year if the topic is time-sensitive (e.g. "Debian AI code ban 2026").
     - If `degraded: true`, all live providers failed and the results are local-only: rephrase the query once and retry; if it is still thin, tell the user about the limitation.
     - If the results are poor or off-topic, reformulate the query (different keywords, or `max_age_days` for recency) and search again — at most 1–2 reformulations.
