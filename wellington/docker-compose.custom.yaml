@@ -15,7 +15,7 @@ services:
       - WEB_LOADER_ENGINE=safe_web
       - PLAYWRIGHT_TIMEOUT=60000
       - WHISPER_MODEL=base
-      - SESSION_SECRET=${SESSION_SECRET}
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-${SESSION_SECRET:?Set WEBUI_SECRET_KEY or SESSION_SECRET in the Compose .env file}}
       - DO_NOT_TRACK=true
       # Points OpenWebUI to the internal Docling service
       - DOCLING_API_URL=http://docling-server:5001/v1/convert

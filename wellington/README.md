@@ -32,7 +32,7 @@ wellington/
 ├── docker-compose.custom.yaml   # full stack (owui + docling + crawl4ai + searxng + mcpo)
 ├── mcpo.json             # MCP→OpenAPI bridge config (Holds the Crawl4AI Bearer token) [gitignored]
 ├── mcpo.json.example     # committed template for mcpo.json
-├── .env.example          # template for the REPO-ROOT .env (all custom vars + placeholders)
+├── .env.example          # template for wellington/.env (all custom vars + placeholders)
 ├── memory.md             # local agent notes [gitignored]
 ├── sync.ps1              # Windows: status / rebase onto upstream/main
 ├── sync.sh               # Linux/macOS: status / rebase onto upstream/main
@@ -40,7 +40,7 @@ wellington/
 └── README.md
 ```
 
-The live secrets live in the **repo-root `.env`** (one directory up), which is gitignored.
+The live secrets live in **`wellington/.env`**, which is gitignored.
 
 ---
 
@@ -97,20 +97,20 @@ that used it showed no Sources list at all. The table rows above restore that:
 
 ## Setup
 
-### 1. Environment secrets — repo-root `.env`
+### 1. Environment secrets — `wellington/.env`
 
-Create `<repo>/.env` from the template (do **not** commit it):
+Create `wellington/.env` from the template (do **not** commit it):
 
 ```bash
-cp wellington/.env.example .env
-# then edit .env and fill in real values
+cp wellington/.env.example wellington/.env
+# then edit wellington/.env and fill in real values
 ```
 
 Required variables (and who consumes them):
 
 | Variable | Used by |
 | --- | --- |
-| `WEBUI_SECRET_KEY` | OpenWebUI (JWT signing) |
+| `WEBUI_SECRET_KEY` | OpenWebUI JWT signing; keep the same value across redeploys. Existing `SESSION_SECRET` values also work as a fallback. |
 | `MCPO_API_KEY` | mcpo REST bridge auth |
 | `CRAWL4AI_API_KEY` | Crawl4AI MCP server **and** the Bearer token in `wellington/mcpo.json` |
 | `DOCLING_API_KEY` | docling-server |
@@ -124,7 +124,7 @@ mcpo does **not** support env-var substitution in its JSON config, so the real
 
 ```bash
 cp wellington/mcpo.json.example wellington/mcpo.json
-# replace CHANGE-ME-CRAWL4AI_API_KEY with the SAME value as CRAWL4AI_API_KEY in .env
+# replace CHANGE-ME-CRAWL4AI_API_KEY with the SAME value as CRAWL4AI_API_KEY in wellington/.env
 ```
 
 `wellington/mcpo.json` is gitignored; `wellington/mcpo.json.example` is the committed template.
@@ -135,7 +135,7 @@ cp wellington/mcpo.json.example wellington/mcpo.json
 `__SEARXNG_SECRET__` / `__SEARXNG_BRAVE_API_KEY__` placeholders (current SearXNG no longer
 supports the legacy `!process "env:…"` YAML tag, which used to crash-loop the container).
 The compose `entrypoint` expands them from the `SEARXNG_SECRET` / `SEARXNG_BRAVE_API_KEY`
-env vars (injected from the repo-root `.env`) into a container-local file at start, then
+env vars (injected from `wellington/.env`) into a container-local file at start, then
 execs the image's entrypoint. No real secrets are stored in the tracked file.
 
 ### 4. Crawl4AI LLM patch (optional)
@@ -163,10 +163,10 @@ reverts retention to 5 minutes** — see `UPGRADING.md` for the re-apply steps.
 
 ## Run
 
-Run from the **repo root** so Docker Compose reads the repo-root `.env`:
+Run from the **repo root**, passing `wellington/.env` explicitly to Docker Compose:
 
 ```bash
-docker compose -f wellington/docker-compose.custom.yaml up -d
+docker compose --env-file wellington/.env -f wellington/docker-compose.custom.yaml up -d
 ```
 
 Services started:
@@ -187,7 +187,7 @@ tool, reachable through mcpo as the `md` / `crawl` tools.
 > **mcpo caveat:** mcpo opens its MCP sessions (crawl4ai, searxng-mcp) **once at
 > startup and gives up on failure** — it does not reliably auto-reconnect. If the
 > `crawl4ai` (or `searxng-mcp`) container is ever recreated, restart mcpo afterwards
-> (`docker compose -f wellington/docker-compose.custom.yaml restart mcpo`), otherwise
+> (`docker compose --env-file wellington/.env -f wellington/docker-compose.custom.yaml restart mcpo`), otherwise
 > the `/crawl4ai/*` and `/searxng/*` routes return 403/500 ("MCP session is not
 > available") until the next mcpo start.
 
@@ -238,7 +238,7 @@ git rebase --continue
   (it then stashes and restores your uncommitted work).
 
 **After a rebase, always:**
-1. Rebuild the image (`docker compose -f wellington/docker-compose.custom.yaml build`).
+1. Rebuild the image (`docker compose --env-file wellington/.env -f wellington/docker-compose.custom.yaml build`).
 2. Re-import any Functions/Skills/Tools if you changed them.
 3. `git grep -in "scrapling\|patchright\|browserforge\|curl-cffi" backend src Dockerfile`
    should return nothing (Scrapling must stay removed).
@@ -249,7 +249,7 @@ git rebase --continue
 
 ## Secrets checklist
 
-- Repo-root `.env` — **gitignored** (all six custom secrets).
+- `wellington/.env` — **gitignored** (custom secrets).
 - `wellington/mcpo.json` — **gitignored** (Crawl4AI Bearer token).
 - `wellington/memory.md` — **gitignored** (local notes).
 - `wellington/searxng-config/settings.yml` — contains **no** raw secrets (uses `!process "env:…"`).
