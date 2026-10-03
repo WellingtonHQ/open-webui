@@ -20,18 +20,14 @@ wellington/
 ├── functions/            # OpenWebUI Function(s) — import via Admin → Functions
 │   └── better_qwen3_8.py
 ├── skills/               # OpenWebUI Skill(s) — import via Admin → Skills
-│   └── search_the_web.md
-├── tools/                # OpenWebUI Tool specs + helpers
-│   ├── web_search.spec.json
-│   ├── crawl4ai.spec.json
-│   ├── make_inline_specs.py
-│   ├── c4ai-llm-patch/     # Crawl4AI thinking/LLM hook (site-packages .pth)
-│   └── c4ai-monitor-patch/ # Crawl4AI monitor retention patch (24h, version-pinned)
-├── searxng-config/
-│   └── settings.yml      # SearXNG config template (__SEARXNG_*__ placeholders, expanded at start)
-├── docker-compose.custom.yaml   # full stack (owui + docling + crawl4ai + searxng + mcpo)
-├── mcpo.json             # MCP→OpenAPI bridge config (Holds the Crawl4AI Bearer token) [gitignored]
-├── mcpo.json.example     # committed template for mcpo.json
+│   ├── search_the_web.md
+│   └── write_linkedin_article.md
+├── docker-compose.custom.yaml   # OpenWebUI + Docling + daily database backups
+├── backup.Dockerfile     # Python backup/restore helper image
+├── backup.py             # SQLite backup logic and daily scheduler (runs in Docker)
+├── backup.ps1 / backup.sh       # manual backup wrappers for Windows / Linux / macOS
+├── restore.py            # database validation and restore logic (runs in Docker)
+├── restore.ps1 / restore.sh     # restore wrappers for Windows / Linux / macOS
 ├── .env.example          # template for wellington/.env (all custom vars + placeholders)
 ├── memory.md             # local agent notes [gitignored]
 ├── sync.ps1              # Windows: status / rebase onto upstream/main
@@ -52,7 +48,7 @@ entire sync-conflict surface. Preserve them on every rebase.
 | File | Change |
 | --- | --- |
 | `Dockerfile` | `NODE_OPTIONS=--max-old-space-size=8192` (SvelteKit build heap bump) |
-| `backend/open_webui/utils/middleware.py` | Crawl4AI markdown-surfacing fix + MCP tool-result citation parsing (see below) |
+| `backend/open_webui/utils/middleware.py` | MCP tool-result citation parsing (see below) |
 | `backend/open_webui/models/automations.py` | persistent-chat automation |
 | `backend/open_webui/utils/automations.py` | persistent-chat automation logic |
 | `backend/open_webui/routers/tasks.py` | automation / title-generation task wiring |
@@ -236,53 +232,7 @@ Required variables (and who consumes them):
 | Variable | Used by |
 | --- | --- |
 | `WEBUI_SECRET_KEY` | OpenWebUI JWT signing; keep the same value across redeploys. Existing `SESSION_SECRET` values also work as a fallback. |
-| `MCPO_API_KEY` | mcpo REST bridge auth |
-| `CRAWL4AI_API_KEY` | Crawl4AI MCP server **and** the Bearer token in `wellington/mcpo.json` |
 | `DOCLING_API_KEY` | docling-server |
-| `SEARXNG_SECRET` | SearXNG `server.secret_key` |
-| `SEARXNG_BRAVE_API_KEY` | SearXNG `braveapi` engine key |
-
-### 2. `wellington/mcpo.json` (Crawl4AI token)
-
-mcpo does **not** support env-var substitution in its JSON config, so the real
-`CRAWL4AI_API_KEY` must be pasted in here:
-
-```bash
-cp wellington/mcpo.json.example wellington/mcpo.json
-# replace CHANGE-ME-CRAWL4AI_API_KEY with the SAME value as CRAWL4AI_API_KEY in wellington/.env
-```
-
-`wellington/mcpo.json` is gitignored; `wellington/mcpo.json.example` is the committed template.
-
-### 3. SearXNG config
-
-`wellington/searxng-config/settings.yml` is a **template**: the two SearXNG secrets are
-`__SEARXNG_SECRET__` / `__SEARXNG_BRAVE_API_KEY__` placeholders (current SearXNG no longer
-supports the legacy `!process "env:…"` YAML tag, which used to crash-loop the container).
-The compose `entrypoint` expands them from the `SEARXNG_SECRET` / `SEARXNG_BRAVE_API_KEY`
-env vars (injected from `wellington/.env`) into a container-local file at start, then
-execs the image's entrypoint. No real secrets are stored in the tracked file.
-
-### 4. Crawl4AI LLM patch (optional)
-
-`wellington/tools/c4ai-llm-patch/` contains a thinking/LLM hook for Crawl4AI's LLM content
-filter (`f:llm`). It is **already mounted** by the compose file: a `.pth` in site-packages
-auto-loads `c4ai_llm_thinking.py`, which injects Qwen3.8 thinking control
-(`LLM_REASONING_EFFORT` etc.) into litellm's `extra_body`. The hook is a no-op unless
-`LLM_REASONING_EFFORT` is set, and it swallows its own import errors — so after a Crawl4AI
-version bump you must *verify* it still works (see `UPGRADING.md`).
-
-### 5. Crawl4AI monitor patch (retention)
-
-`wellington/tools/c4ai-monitor-patch/monitor.py` is a **version-pinned snapshot** of the
-`unclecode/crawl4ai:0.9.2` image's `/app/monitor.py`, with a 3-line change: request/error
-history is now kept for **24h** instead of 5 minutes. Without it, the monitor's in-memory
-deques are purged every 5 min (`server.py` `_timeline_updater`), so the dashboard's
-"Requests" panel is empty whenever you look at it (only the Redis-backed endpoint stats
-survive). The file is bind-mounted over the container's `/app/monitor.py`.
-
-**Bumping the `unclecode/crawl4ai` image tag without re-applying this patch silently
-reverts retention to 5 minutes** — see `UPGRADING.md` for the re-apply steps.
 
 ---
 
@@ -300,35 +250,20 @@ Services started:
 | --- | --- |
 | `open-webui` | the app (built from the repo-root `Dockerfile`; `build.context: ..`) |
 | `docling-server` | document conversion (PDF/DOCX → markdown) |
-| `crawl4ai` | web → markdown crawler (exposed as the `md`/`crawl` tools via mcpo) |
-| `searxng` | metasearch engine (JSON API) |
-| `searxng-mcp` | SearXNG MCP server |
-| `mcpo` | MCP → OpenAPI/REST bridge that exposes the above as OpenWebUI tools |
+| `open-webui-backup` | daily verified SQLite backups with configurable time, timezone, and retention |
 
 The in-app **web-fetch engine is `safe_web`** (set in the compose `environment`).
-The earlier Scrapling stealth fetcher was removed; Crawl4AI is the heavy web-fetch
-tool, reachable through mcpo as the `md` / `crawl` tools.
-
-> **mcpo caveat:** mcpo opens its MCP sessions (crawl4ai, searxng-mcp) **once at
-> startup and gives up on failure** — it does not reliably auto-reconnect. If the
-> `crawl4ai` (or `searxng-mcp`) container is ever recreated, restart mcpo afterwards
-> (`docker compose --env-file wellington/.env -f wellington/docker-compose.custom.yaml restart mcpo`), otherwise
-> the `/crawl4ai/*` and `/searxng/*` routes return 403/500 ("MCP session is not
-> available") until the next mcpo start.
 
 ---
 
-## Re-importing functions / skills / tools
+## Re-importing functions / skills
 
-OpenWebUI loads Functions, Skills, and Tools **from its database, not from these files**.
-The files in `wellington/functions|skills|tools` are the source of truth. After a fresh
+OpenWebUI loads Functions and Skills **from its database, not from these files**.
+The files in `wellington/functions` and `wellington/skills` are the source of truth. After a fresh
 install or a rebase, re-import them through the UI:
 
 - **Functions** → Admin → Functions → import `wellington/functions/*.py`
 - **Skills** → Admin → Skills → import `wellington/skills/*.md`
-- **Tools** → Admin → Tools → import `wellington/tools/*.spec.json`
-  (regenerate with `python wellington/tools/make_inline_specs.py` if you change them —
-  run it from the `wellington/` directory)
 
 ---
 
@@ -364,21 +299,18 @@ git rebase --continue
 
 **After a rebase, always:**
 1. Rebuild the image (`docker compose --env-file wellington/.env -f wellington/docker-compose.custom.yaml build`).
-2. Re-import any Functions/Skills/Tools if you changed them.
+2. Re-import any Functions/Skills if you changed them.
 3. `git grep -in "scrapling\|patchright\|browserforge\|curl-cffi" backend src Dockerfile`
    should return nothing (Scrapling must stay removed).
-4. If any image tag changed, re-verify the version-pinned Crawl4AI patches and the
-   mcpo restart rule — see `UPGRADING.md`.
+4. If any image tag changed, verify that the affected service starts and works correctly.
 
 ---
 
 ## Secrets checklist
 
 - `wellington/.env` — **gitignored** (custom secrets).
-- `wellington/mcpo.json` — **gitignored** (Crawl4AI Bearer token).
 - `wellington/memory.md` — **gitignored** (local notes).
-- `wellington/searxng-config/settings.yml` — contains **no** raw secrets (uses `!process "env:…"`).
-- Committed templates (safe to share): `wellington/.env.example`, `wellington/mcpo.json.example`.
+- Committed template (safe to share): `wellington/.env.example`.
 
 If you ever `git diff` a tracked file and see a real key, treat it as an incident:
 rotate the key, move it to `.env`, and keep only the placeholder in the committed file.
