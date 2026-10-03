@@ -4,6 +4,8 @@
 	const dispatch = createEventDispatcher();
 
 	import RecursiveFolder from './RecursiveFolder.svelte';
+	import { settings } from '$lib/stores';
+	import { compareFolders } from '$lib/utils/folderSort';
 
 	export let folderRegistry = {};
 
@@ -27,12 +29,7 @@
 				}
 				return f.parent_id === null;
 			})
-			.sort((a, b) =>
-				(folders[a].name ?? '').localeCompare(folders[b].name ?? '', undefined, {
-					numeric: true,
-					sensitivity: 'base'
-				})
-			);
+			.sort((a, b) => compareFolders(folders[a], folders[b], $settings?.folderSort));
 		ownedList = rootKeys.filter((key) => !folders[key].shared);
 		sharedList = rootKeys.filter((key) => folders[key].shared);
 	}

@@ -11,7 +11,8 @@
 	import { goto } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
 
-	import { chatId, mobile, selectedFolder, showSidebar, user } from '$lib/stores';
+	import { chatId, mobile, selectedFolder, showSidebar, user, settings } from '$lib/stores';
+	import { compareFolders } from '$lib/utils/folderSort';
 
 	import {
 		deleteFolderById,
@@ -899,12 +900,7 @@
 					{#if folders[folderId]?.childrenIds}
 						{@const children = folders[folderId]?.childrenIds
 							.map((id) => folders[id])
-							.sort((a, b) =>
-								a.name.localeCompare(b.name, undefined, {
-									numeric: true,
-									sensitivity: 'base'
-								})
-							)}
+							.sort((a, b) => compareFolders(a, b, $settings?.folderSort))}
 
 						{#each children as childFolder (`${folderId}-${childFolder.id}`)}
 							<svelte:self

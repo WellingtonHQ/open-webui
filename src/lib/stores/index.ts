@@ -284,6 +284,7 @@ type Settings = {
 	renderMarkdownInAssistantMessages?: boolean;
 	recentEmojis?: string[];
 	pinnedMenuItems?: string[];
+	folderSort?: 'alphabetical' | 'recent_activity';
 	pinnedNotesOrder?: string[];
 
 	defaultUploadContext?: 'full' | 'focused';

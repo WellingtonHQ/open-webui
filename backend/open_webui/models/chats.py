@@ -1811,6 +1811,31 @@ class ChatTable:
         except Exception:
             return None
 
+    async def get_activity_by_folder_ids(
+        self,
+        folder_ids: list[str],
+        user_id: str | None = None,
+        db: AsyncSession | None = None,
+    ) -> dict[str, int]:
+        """Aggregate metadata only; callers must authorize the supplied folder IDs."""
+        if not folder_ids:
+            return {}
+        stmt = (
+            select(Chat.folder_id, func.max(func.coalesce(Chat.updated_at, Chat.created_at)))
+            .where(
+                Chat.folder_id.in_(folder_ids),
+                Chat.archived == False,
+                or_(Chat.pinned == False, Chat.pinned == None),
+                Chat.meta['internal'].as_boolean().is_not(True),
+            )
+            .group_by(Chat.folder_id)
+        )
+        if user_id is not None:
+            stmt = stmt.where(Chat.user_id == user_id)
+        async with get_async_db_context(db) as session:
+            result = await session.execute(stmt)
+            return {folder_id: int(timestamp or 0) for folder_id, timestamp in result.all()}
+
     async def count_unread_by_folder_ids(
         self,
         user_id: str,

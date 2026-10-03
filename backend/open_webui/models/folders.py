@@ -59,6 +59,7 @@ class FolderNameIdResponse(BaseModel):
     parent_id: Optional[str] = None
     is_expanded: bool = False
     unread_count: int = 0
+    last_activity_at: Optional[int] = None
     created_at: int
     updated_at: int
 

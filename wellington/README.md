@@ -40,6 +40,23 @@ The live secrets live in **`wellington/.env`**, which is gitignored.
 
 ---
 
+## Activity-based folder sorting
+
+Use the **Sort folders** menu beside the sidebar's Folders heading to choose
+**Alphabetical** or **Recent chat activity**. The selection is saved to your
+account and applies to top-level folders and every level of subfolders.
+
+Activity includes visible chats in the entire subtree, even when folders are
+collapsed. Archived, internal, and pinned chats are excluded. Empty folders use
+their creation time. Expanding, collapsing, or editing a folder does not promote
+it; actions that modify a chat's `updated_at`, including moves, do.
+
+The implementation and verification notes are in
+[`FOLDER_ACTIVITY_SORT_PLAN.md`](FOLDER_ACTIVITY_SORT_PLAN.md). The customization
+also touches the folder/chat models and folder router, the event sink, sidebar
+components, settings/chat-list stores, and English translation strings. New
+helpers and focused tests live alongside the backend and frontend source.
+
 ## Core edits (the only upstream files modified)
 
 These are the *only* files outside `wellington/` that differ from upstream. They are the
@@ -61,6 +78,19 @@ entire sync-conflict surface. Preserve them on every rebase.
 | `src/lib/components/chat/Messages/Citations.svelte` | cited-only filter for web sources (see below) |
 | `src/lib/components/chat/Messages/ResponseMessage.svelte` | passes message text into Citations |
 | `src/lib/i18n/locales/en-US/translation.json` | i18n strings |
+| `src/lib/i18n/locales/en-GB/translation.json` | folder-sort labels |
+| `backend/open_webui/models/chats.py` | batched folder chat-activity query |
+| `backend/open_webui/models/folders.py` | computed folder activity response field |
+| `backend/open_webui/routers/folders.py` | owned/shared folder activity metadata |
+| `backend/open_webui/events.py` | cross-tab folder metadata invalidation |
+| `backend/open_webui/utils/folder_activity.py` | ancestor activity aggregation (new file) |
+| `backend/tests/test_folder_activity.py` | focused activity/query tests (new file) |
+| `src/lib/components/layout/Sidebar.svelte` | folder sort menu and metadata refresh |
+| `src/lib/components/layout/Sidebar/Folders.svelte` | top-level activity sorting |
+| `src/lib/components/layout/Sidebar/RecursiveFolder.svelte` | nested activity sorting |
+| `src/lib/stores/index.ts` | account folder-sort preference type |
+| `src/lib/stores/chatList.ts` | folder activity refresh bridge |
+| `src/lib/utils/folderSort.ts` and `folderSort.test.ts` | deterministic folder comparator and tests (new files) |
 
 > Note: `requirements.txt`, `backend/open_webui/retrieval/web/utils.py`,
 > `backend/open_webui/tools/builtin.py`, `backend/open_webui/config.py`, and

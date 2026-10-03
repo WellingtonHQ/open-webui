@@ -1168,7 +1168,27 @@ class EventFunctionSink:
         schedule_event_function_dispatch(app, event, request)
 
 
-EVENT_SINKS = [SocketSessionEventSink(), EventFunctionSink(), WebhookEventSink(), NotificationEventSink()]
+class FolderActivityEventSink:
+    async def handle_event(self, app: Any, event: Event, request: Any | None = None) -> None:
+        # Metadata-only invalidation covers API/bulk changes in every tab without
+        # exposing chat content or running an aggregate query on each write.
+        if not event.event.startswith(('chat.', 'folder.')):
+            return
+        actor_id = (event.actor or {}).get('id')
+        if not actor_id:
+            return
+        from open_webui.socket.main import sio
+
+        await sio.emit(
+            'events',
+            {'data': {'type': 'folder:activity', 'data': {}}},
+            room=f'user:{actor_id}',
+        )
+
+
+EVENT_SINKS = [
+    SocketSessionEventSink(), FolderActivityEventSink(), EventFunctionSink(), WebhookEventSink(), NotificationEventSink()
+]
 
 
 async def publish_event(

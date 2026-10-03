@@ -31,6 +31,7 @@
 		loadNextChatListPage,
 		refreshChatList,
 		registerFolderRefreshHandler,
+		registerFolderActivityHandler,
 		setAllChatsRead,
 		setChatActive,
 		setChatReadAt
@@ -91,6 +92,7 @@
 	import DropdownMenu from '../common/DropdownMenu.svelte';
 	import CheckIcon from '../icons/Check.svelte';
 	import MoreHorizontalIcon from './Sidebar/icons/MoreHorizontal.svelte';
+	import { type FolderSortMode } from '$lib/utils/folderSort';
 	import MobileSwipePanel from '../common/MobileSwipePanel.svelte';
 
 	const BREAKPOINT = 768;
@@ -126,6 +128,36 @@
 	let showFolders = false;
 	let showSharedFolders = false;
 	let showChatsMenu = false;
+	let showFolderSortMenu = false;
+	let folderRequestGeneration = 0;
+	let folderRefreshTimer: ReturnType<typeof setTimeout>;
+	let sidebarDragging = false;
+	let pendingFolderRefresh = false;
+
+	const scheduleFolderRefresh = () => {
+		clearTimeout(folderRefreshTimer);
+		folderRefreshTimer = setTimeout(() => {
+			void initFolders();
+		}, 200);
+	};
+	const startSidebarDrag = () => {
+		sidebarDragging = true;
+	};
+	const endSidebarDrag = () => {
+		sidebarDragging = false;
+		if (pendingFolderRefresh) scheduleFolderRefresh();
+	};
+	const setFolderSort = async (mode: FolderSortMode) => {
+		const previous = $settings.folderSort;
+		settings.set({ ...$settings, folderSort: mode });
+		showFolderSortMenu = false;
+		try {
+			await updateUserSettings(localStorage.token, { ui: { folderSort: mode } });
+		} catch (error) {
+			settings.set({ ...$settings, folderSort: previous });
+			toast.error(`${error}`);
+		}
+	};
 
 	let folders = {};
 	type SelectedSidebarFolder = { id: string } | null;
@@ -243,6 +275,13 @@
 		if ($config?.features?.enable_folders === false) {
 			return;
 		}
+		if (sidebarDragging) {
+			pendingFolderRefresh = true;
+			return;
+		}
+		pendingFolderRefresh = false;
+		clearTimeout(folderRefreshTimer);
+		const generation = ++folderRequestGeneration;
 
 		const [folderList, sharedFolderList] = await Promise.all([
 			getFolders(localStorage.token).catch((error) => {
@@ -252,7 +291,12 @@
 				return [];
 			})
 		]);
-		_folders.set(folderList.sort((a, b) => b.updated_at - a.updated_at));
+		if (generation !== folderRequestGeneration) return;
+		if (sidebarDragging) {
+			pendingFolderRefresh = true;
+			return;
+		}
+		_folders.set(folderList);
 
 		sharedFolders = sharedFolderList;
 		const folderMap: Record<string, any> = {};
@@ -280,11 +324,6 @@
 				folderMap[folder.parent_id].childrenIds = folderMap[folder.parent_id].childrenIds
 					? [...folderMap[folder.parent_id].childrenIds, folder.id]
 					: [folder.id];
-
-				// Sort the children by updated_at field
-				folderMap[folder.parent_id].childrenIds.sort((a, b) => {
-					return folderMap[b].updated_at - folderMap[a].updated_at;
-				});
 			}
 		}
 
@@ -584,7 +623,7 @@
 		}
 	};
 
-	const onFocus = () => {};
+	const onFocus = scheduleFolderRefresh;
 
 	const onBlur = () => {
 		shiftKey = false;
@@ -708,6 +747,9 @@
 
 		const dropZone = document.getElementById('sidebar');
 		if (dropZone) {
+			dropZone.addEventListener('dragstart', startSidebarDrag, true);
+			document.addEventListener('dragend', endSidebarDrag, true);
+			document.addEventListener('drop', endSidebarDrag, true);
 			dropZone.addEventListener('dragover', onDragOver);
 			dropZone.addEventListener('drop', onDrop);
 			dropZone.addEventListener('dragleave', onDragLeave);
@@ -733,12 +775,16 @@
 
 			return Promise.all(Object.values(folderRegistry).map((folder) => folder?.setFolderItems?.()));
 		});
+		const unregisterFolderActivityHandler = registerFolderActivityHandler(scheduleFolderRefresh);
 
 		await tick();
 		await initSidebarData();
 		initPinnedMenuSortable();
 
 		return () => {
+			clearTimeout(folderRefreshTimer);
+			folderRequestGeneration++;
+			unregisterFolderActivityHandler();
 			unsubscribers.forEach((unsubscriber) => unsubscriber());
 
 			window.removeEventListener('keydown', onKeyDown);
@@ -748,6 +794,9 @@
 			window.removeEventListener('blur', onBlur);
 
 			if (dropZone) {
+				dropZone.removeEventListener('dragstart', startSidebarDrag, true);
+				document.removeEventListener('dragend', endSidebarDrag, true);
+				document.removeEventListener('drop', endSidebarDrag, true);
 				dropZone.removeEventListener('dragover', onDragOver);
 				dropZone.removeEventListener('drop', onDrop);
 				dropZone.removeEventListener('dragleave', onDragLeave);
@@ -774,7 +823,10 @@
 			};
 		};
 	}) => {
-		if (event.data?.type === 'chat:active') {
+		if (event.data?.type === 'folder:activity') {
+			scheduleFolderRefresh();
+		} else if (event.data?.type === 'chat:active') {
+			scheduleFolderRefresh();
 			const eventData = event.data.data ?? {};
 			const active = eventData.active ?? false;
 			const found = setChatActive(event.chat_id, active);
@@ -802,6 +854,7 @@
 				}
 				return;
 			}
+			scheduleFolderRefresh();
 
 			await refreshChatRows();
 			if (eventData.folder_id) {
@@ -1390,6 +1443,47 @@
 								}
 							}}
 						>
+							<svelte:fragment slot="action">
+								<Dropdown bind:show={showFolderSortMenu} align="end">
+									<Tooltip content={$i18n.t('Sort folders')}>
+										<button
+											type="button"
+											aria-label={$i18n.t('Sort folders')}
+											class="flex items-center justify-center w-7 h-7 rounded-lg text-gray-400 hover:text-gray-500 dark:hover:text-gray-300"
+										>
+											<MoreHorizontalIcon className="size-3.5" strokeWidth="2" />
+										</button>
+									</Tooltip>
+									<div slot="content">
+										<DropdownMenu className="min-w-[12rem]">
+											<button
+												type="button"
+												on:click={() => setFolderSort('alphabetical')}
+												aria-pressed={($settings.folderSort ?? 'alphabetical') === 'alphabetical'}
+											>
+												<span class="size-3.5"
+													>{#if ($settings.folderSort ?? 'alphabetical') === 'alphabetical'}<CheckIcon
+															className="size-3.5"
+														/>{/if}</span
+												>
+												{$i18n.t('Alphabetical')}
+											</button>
+											<button
+												type="button"
+												on:click={() => setFolderSort('recent_activity')}
+												aria-pressed={$settings.folderSort === 'recent_activity'}
+											>
+												<span class="size-3.5"
+													>{#if $settings.folderSort === 'recent_activity'}<CheckIcon
+															className="size-3.5"
+														/>{/if}</span
+												>
+												{$i18n.t('Recent chat activity')}
+											</button>
+										</DropdownMenu>
+									</div>
+								</Dropdown>
+							</svelte:fragment>
 							<Folders
 								bind:folderRegistry
 								{folders}

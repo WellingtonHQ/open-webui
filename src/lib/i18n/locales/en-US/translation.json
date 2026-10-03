@@ -1,4 +1,7 @@
 {
+	"Sort folders": "Sort folders",
+	"Alphabetical": "Alphabetical",
+	"Recent chat activity": "Recent chat activity",
 	"-1 for no limit, or a positive integer for a specific limit": "",
 	"(latest)": "",
 	"(leave blank for to use commercial endpoint)": "",

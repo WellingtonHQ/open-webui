@@ -32,6 +32,7 @@ from open_webui.utils.access_control import (
 )
 from open_webui.utils.access_control.files import can_read_all_folder_files, get_accessible_folder_files
 from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.utils.folder_activity import folder_activity_timestamps
 from open_webui.tasks import has_active_tasks
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -132,9 +133,17 @@ async def get_folders(
         folder_list.append(folder)
 
     unread_counts = await get_folder_unread_counts(user.id, db=db)
+    activity = folder_activity_timestamps(
+        [folder.model_dump() for folder in folder_list],
+        await Chats.get_activity_by_folder_ids(list(parent_by_id), user_id=user.id, db=db),
+    )
 
     return [
-        FolderNameIdResponse(**folder.model_dump(), unread_count=unread_counts.get(folder.id, 0))
+        FolderNameIdResponse(
+            **folder.model_dump(),
+            unread_count=unread_counts.get(folder.id, 0),
+            last_activity_at=activity.get(folder.id),
+        )
         for folder in folder_list
     ]
 
@@ -279,7 +288,12 @@ async def get_shared_folders(
                     }
                 )
 
-    return results
+    # The shared chat endpoint exposes all nonarchived chats in authorized folders.
+    # Only aggregate IDs already authorized above, including inherited children.
+    activity = folder_activity_timestamps(
+        results, await Chats.get_activity_by_folder_ids([folder['id'] for folder in results], db=db)
+    )
+    return [{**folder, 'last_activity_at': activity[folder['id']]} for folder in results]
 
 
 ############################

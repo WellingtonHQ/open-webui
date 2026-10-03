@@ -48,6 +48,7 @@ export const refreshChatList = async (
 	}
 
 	chatsStore.set(nextChats);
+	refreshFolderActivity();
 	currentPage = 1;
 	allLoaded = nextChats.length === 0;
 
@@ -64,6 +65,16 @@ export const refreshChatList = async (
 // The sidebar owns folder state. This bridge lets other components refresh it.
 type FolderRefreshHandler = (folderId?: string | null, chat?: ChatListItem | null) => unknown;
 const folderRefreshHandlers = new Set<FolderRefreshHandler>();
+const folderActivityHandlers = new Set<() => void>();
+
+export const registerFolderActivityHandler = (handler: () => void) => {
+	folderActivityHandlers.add(handler);
+	return () => folderActivityHandlers.delete(handler);
+};
+
+const refreshFolderActivity = () => {
+	for (const handler of folderActivityHandlers) handler();
+};
 
 export const registerFolderRefreshHandler = (handler: FolderRefreshHandler) => {
 	folderRefreshHandlers.add(handler);
@@ -76,6 +87,7 @@ export const refreshFolderChatLists = async (
 	folderId?: string | null,
 	chat?: ChatListItem | null
 ) => {
+	refreshFolderActivity();
 	await Promise.all([...folderRefreshHandlers].map((handler) => handler(folderId, chat)));
 };
 
