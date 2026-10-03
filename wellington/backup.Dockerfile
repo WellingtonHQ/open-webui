@@ -6,4 +6,5 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backup.py /backup.py
+COPY restore.py /restore.py
 ENTRYPOINT ["python", "-u", "/backup.py"]

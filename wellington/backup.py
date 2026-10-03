@@ -17,7 +17,7 @@ LOGGER = logging.getLogger('open-webui-backup')
 FILENAME_FORMAT = 'webui-%Y-%m-%d_%H-%M-%S-%fZ.sqlite3'
 
 
-def backup_database(source: Path, destination: Path, retention_days: int) -> Path:
+def backup_database(source: Path, destination: Path, retention_days: int | None) -> Path:
     """Publish only complete backups; prune this job's old files after success."""
     destination.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
@@ -34,6 +34,8 @@ def backup_database(source: Path, destination: Path, retention_days: int) -> Pat
         with closing(sqlite3.connect(source.resolve().as_uri() + '?mode=ro', uri=True)) as src:
             with closing(sqlite3.connect(temporary)) as target:
                 src.backup(target, pages=256, progress=check_timeout, sleep=0.1)
+                # Publish a standalone file, without requiring WAL sidecar files.
+                target.execute('PRAGMA journal_mode=DELETE')
                 result = target.execute('PRAGMA integrity_check').fetchall()
                 if result != [('ok',)]:
                     raise RuntimeError(f'Backup integrity check failed: {result}')
@@ -42,6 +44,8 @@ def backup_database(source: Path, destination: Path, retention_days: int) -> Pat
         temporary.unlink(missing_ok=True)
 
     LOGGER.info('Backup saved: %s (%s bytes)', output, output.stat().st_size)
+    if retention_days is None:
+        return output
     cutoff = now - timedelta(days=retention_days)
     for candidate in destination.glob('webui-*.sqlite3'):
         try:
@@ -66,16 +70,21 @@ def next_backup(now: datetime, backup_time, zone: ZoneInfo) -> datetime:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--once', action='store_true', help='Back up now and exit')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--once', action='store_true', help='Back up now with scheduled retention')
+    mode.add_argument('--manual', action='store_true', help='Back up now to manual/ without deleting backups')
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    source = Path('/data/webui.db')
+    destination = Path('/backups')
+    if args.manual:
+        backup_database(source, destination / 'manual', retention_days=None)
+        return
     backup_time = datetime.strptime(os.getenv('BACKUP_TIME', '03:00'), '%H:%M').time()
     zone = ZoneInfo(os.getenv('BACKUP_TIMEZONE', 'America/Los_Angeles'))
     retention_days = int(os.getenv('BACKUP_RETENTION_DAYS', '30'))
     if retention_days < 1:
         raise ValueError('BACKUP_RETENTION_DAYS must be at least 1')
-    source = Path('/data/webui.db')
-    destination = Path('/backups')
     if args.once:
         backup_database(source, destination, retention_days)
         return

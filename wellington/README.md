@@ -129,26 +129,98 @@ docker compose -f wellington/docker-compose.custom.yaml logs --tail 50 open-webu
 ```
 
 After changing the settings, run the same `up` command to recreate the service.
-To take an extra backup immediately:
+
+### Manual backups
+
+From the repository root, run:
 
 ```powershell
-docker compose -f wellington/docker-compose.custom.yaml run --rm --no-deps open-webui-backup --once
+.\wellington\backup.ps1
 ```
+
+On Linux/macOS, use the Bash equivalent:
+
+```bash
+bash wellington/backup.sh
+```
+
+The script builds the helper image if needed and takes a verified online backup
+without stopping OpenWebUI. It saves the file under
+`OPENWEBUI_BACKUP_DIR/manual` (by default `M:\Backups\openwebui\manual`).
+It never deletes previous backups. The daily job only prunes files at the root
+of the backup directory, so these manual snapshots are also excluded from
+scheduled retention. Delete unwanted manual snapshots yourself.
+
+The equivalent Docker command is:
+
+```powershell
+docker compose -f wellington/docker-compose.custom.yaml run --rm --no-deps open-webui-backup --manual
+```
+
+`--once` still takes an extra scheduled-style snapshot in the root directory
+and applies the configured retention; use `backup.ps1`, `backup.sh`, or `--manual` for a
+snapshot without cleanup. The scripts locate Compose relative to their own
+folder, so they also work from another working directory.
+
+### Restoring a database
 
 The database includes chats, users, and database-backed settings. Uploaded files
 and separate vector stores are outside this database backup. Keep the existing
 `WEBUI_SECRET_KEY` in your `.env` when restoring.
 
-To restore a database, stop OpenWebUI and the backup service first. Replace
-`<backup-filename>` below with a verified `.sqlite3` file from the backup folder.
-The helper copies it into the external `open-webui` volume as `webui.db` and
-removes the old SQLite journal files before restarting:
+Restore a specific backup file, or pass a folder to select its newest database
+backup (by modification time, including subfolders):
 
 ```powershell
-docker compose -f wellington/docker-compose.custom.yaml stop open-webui open-webui-backup
-docker compose -f wellington/docker-compose.custom.yaml run --rm --no-deps --entrypoint python open-webui-backup -c "import pathlib, shutil, sqlite3; p = pathlib.Path('/backups/<backup-filename>'); c = sqlite3.connect(p.as_uri() + '?mode=ro', uri=True); assert c.execute('PRAGMA integrity_check').fetchall() == [('ok',)]; c.close(); shutil.copyfile(p, '/data/webui.db'); [pathlib.Path('/data/webui.db' + suffix).unlink(missing_ok=True) for suffix in ('-wal', '-shm', '-journal')]"
-docker compose -f wellington/docker-compose.custom.yaml up -d open-webui open-webui-backup
+.\wellington\restore.ps1 -BackupPath 'M:\Backups\openwebui\manual\webui-2026-10-03_17-52-22-564199Z.sqlite3'
+.\wellington\restore.ps1 -BackupPath 'M:\Backups\openwebui\manual'
 ```
+
+On Linux/macOS, set `OPENWEBUI_BACKUP_DIR` in `wellington/.env` to a host path
+such as `/srv/backups/openwebui`, then use:
+
+```bash
+bash wellington/restore.sh /srv/backups/openwebui/manual/webui-2026-10-03_17-52-22-564199Z.sqlite3
+bash wellington/restore.sh /srv/backups/openwebui/manual
+```
+
+To validate a backup without restoring it or stopping services:
+
+```powershell
+.\wellington\restore.ps1 -BackupPath 'M:\Backups\openwebui\manual' -CheckOnly
+```
+
+```bash
+bash wellington/restore.sh /srv/backups/openwebui/manual --check-only
+```
+
+The restore script performs these steps:
+
+1. It prints the selected file and verifies SQLite integrity and the OpenWebUI tables before stopping anything.
+2. It stops OpenWebUI and the scheduled backup service, making the app temporarily unavailable.
+3. It saves a manual safety backup of the current database, if one exists, in `OPENWEBUI_BACKUP_DIR/manual` (by default `M:\Backups\openwebui\manual`), without deleting older backups.
+4. It prepares and verifies the replacement database, removes stale journals, and atomically replaces `webui.db` while preserving the existing file permissions and ownership.
+5. It restarts whichever of those services were running beforehand, including if restoration fails.
+
+Safety backups are timestamped `webui-*.sqlite3` files in
+`OPENWEBUI_BACKUP_DIR/manual` (default `M:\Backups\openwebui\manual`) and are never
+automatically pruned. The restore output prints the filename; pass that file to
+`restore.ps1 -BackupPath` or `restore.sh` to undo a restore.
+
+Folder selection recognizes `webui-*.sqlite3` and `webui.db`; an older full backup
+folder containing `db/webui.db` is also accepted. Only its database is restored;
+other files, Docker images, and environment settings are not replaced. Backups
+with accompanying `-wal` or `-journal` files are rejected because the restore
+input must be a standalone database snapshot. Do not modify the selected backup
+or run another restore/manual backup while restoration is in progress.
+
+The `.ps1` wrappers require PowerShell 5.1+; the `.sh` wrappers require Bash
+(Linux/macOS). Both use Docker Compose and run the shared Python database helpers
+inside Docker, so no host Python installation is needed. Select a different Compose
+configuration with `-ComposeFile PATH` in PowerShell or `--compose-file PATH` in Bash.
+On a fresh instance, create the external `open-webui` Docker volume first, then restore and
+start the stack with Compose; the restore script only restarts existing services
+that were already running.
 
 ### 1. Environment secrets — `wellington/.env`
 
