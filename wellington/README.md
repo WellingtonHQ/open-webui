@@ -97,6 +97,59 @@ that used it showed no Sources list at all. The table rows above restore that:
 
 ## Setup
 
+### Daily database backups
+
+The `open-webui-backup` service backs up `webui.db` with SQLite's online backup
+API while OpenWebUI is running, including committed data still in the write-ahead
+log. It checks database integrity before publishing each timestamped `.sqlite3`
+file. It takes a backup on startup and then daily at the configured time; failed
+backups are logged and retried after five minutes.
+
+These defaults are built into Compose. Override any of them in `wellington/.env`:
+
+```dotenv
+OPENWEBUI_BACKUP_DIR=M:/Backups/openwebui
+OPENWEBUI_BACKUP_TIME=03:00
+OPENWEBUI_BACKUP_TIMEZONE=America/Los_Angeles
+OPENWEBUI_BACKUP_RETENTION_DAYS=30
+```
+
+`OPENWEBUI_BACKUP_TIME` uses a 24-hour clock. `America/Los_Angeles` means 3 a.m. Pacific
+local time, following PST/PDT. For fixed PST (UTC−8) year-round, use `Etc/GMT+8`.
+Retention must be a positive number of days. After a successful backup, this job
+deletes only its own timestamped backups older than that period, using the UTC
+timestamp in the filename. Other files in the destination are left alone.
+
+Create `M:\Backups\openwebui` and ensure Docker Desktop can access the drive.
+From the repository root, start the job and inspect its logs:
+
+```powershell
+docker compose -f wellington/docker-compose.custom.yaml up -d --build open-webui-backup
+docker compose -f wellington/docker-compose.custom.yaml logs --tail 50 open-webui-backup
+```
+
+After changing the settings, run the same `up` command to recreate the service.
+To take an extra backup immediately:
+
+```powershell
+docker compose -f wellington/docker-compose.custom.yaml run --rm --no-deps open-webui-backup --once
+```
+
+The database includes chats, users, and database-backed settings. Uploaded files
+and separate vector stores are outside this database backup. Keep the existing
+`WEBUI_SECRET_KEY` in your `.env` when restoring.
+
+To restore a database, stop OpenWebUI and the backup service first. Replace
+`<backup-filename>` below with a verified `.sqlite3` file from the backup folder.
+The helper copies it into the external `open-webui` volume as `webui.db` and
+removes the old SQLite journal files before restarting:
+
+```powershell
+docker compose -f wellington/docker-compose.custom.yaml stop open-webui open-webui-backup
+docker compose -f wellington/docker-compose.custom.yaml run --rm --no-deps --entrypoint python open-webui-backup -c "import pathlib, shutil, sqlite3; p = pathlib.Path('/backups/<backup-filename>'); c = sqlite3.connect(p.as_uri() + '?mode=ro', uri=True); assert c.execute('PRAGMA integrity_check').fetchall() == [('ok',)]; c.close(); shutil.copyfile(p, '/data/webui.db'); [pathlib.Path('/data/webui.db' + suffix).unlink(missing_ok=True) for suffix in ('-wal', '-shm', '-journal')]"
+docker compose -f wellington/docker-compose.custom.yaml up -d open-webui open-webui-backup
+```
+
 ### 1. Environment secrets — `wellington/.env`
 
 Create `wellington/.env` from the template (do **not** commit it):

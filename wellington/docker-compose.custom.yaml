@@ -30,6 +30,25 @@ services:
     # Docker Desktop: GPUs auto-exposed; no extra config needed
 
 
+  # SQLite online backups; schedule and retention are configured in .env.
+  open-webui-backup:
+    build:
+      context: .
+      dockerfile: backup.Dockerfile
+    environment:
+      BACKUP_TIME: ${OPENWEBUI_BACKUP_TIME:-03:00}
+      BACKUP_TIMEZONE: ${OPENWEBUI_BACKUP_TIMEZONE:-America/Los_Angeles}
+      BACKUP_RETENTION_DAYS: ${OPENWEBUI_BACKUP_RETENTION_DAYS:-30}
+    volumes:
+      # SQLite may need to create WAL shared-memory files even for read-only queries.
+      - open-webui:/data
+      - type: bind
+        source: ${OPENWEBUI_BACKUP_DIR:-M:/Backups/openwebui}
+        target: /backups
+    depends_on:
+      - open-webui
+    restart: unless-stopped
+
   # Docling Document Parser Service
   docling-server:
     image: hwdsl2/docling-server:latest
