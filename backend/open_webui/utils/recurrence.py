@@ -64,6 +64,9 @@ def _parse_rule(s: str, now: Optional[datetime] = None):
     }.get(rule._freq)
 
     if step is None:
+        # dateutil's default anchor carries seconds and the server timezone
+        if not has_dtstart:
+            return rrulestr(stripped, dtstart=anchor.replace(second=0, microsecond=0), ignoretz=True)
         if not rule._dtstart.tzinfo:
             return parsed
         return rrulestr(stripped, dtstart=start, ignoretz=True)
@@ -143,6 +146,18 @@ async def next_run_ns(s: str, tz: str = None) -> Optional[int]:
     if not occurrences:
         return None
     dt = occurrences[0]
+    if zi:
+        dt = dt.replace(tzinfo=zi)
+    return int(dt.timestamp() * 1_000_000_000)
+
+
+def schedule_start_ns(s: str, tz: str = None) -> int:
+    """DTSTART the scheduler anchors the rule to, as epoch nanoseconds."""
+    zi = _resolve_tz(tz)
+    now = datetime.now(zi).replace(tzinfo=None) if zi else datetime.now()
+    parsed = _parse_rule(s, now)
+    rule = parsed._rrule[0] if isinstance(parsed, rruleset) else parsed
+    dt = rule._dtstart
     if zi:
         dt = dt.replace(tzinfo=zi)
     return int(dt.timestamp() * 1_000_000_000)

@@ -29,6 +29,7 @@
 	let startTime = '';
 	let endDate = '';
 	let endDayOffset = 0;
+	let overnight = false;
 	let endTime = '';
 	let allDay = false;
 	let location = '';
@@ -76,6 +77,10 @@
 		return new Date(`${dateStr}T${timeStr || '00:00'}`).getTime() * NS;
 	}
 
+	function endsPastMidnight(): boolean {
+		return !allDay && endTime < startTime;
+	}
+
 	function reset() {
 		if (event) {
 			title = event.title;
@@ -118,6 +123,7 @@
 						(24 * 60 * 60 * 1000 * NS)
 				)
 			: 0;
+		overnight = endDayOffset === 1 && endsPastMidnight();
 	}
 
 	$: if (show) reset();
@@ -136,8 +142,9 @@
 		loading = true;
 		try {
 			const startNs = dateTimeToNs(startDate, allDay ? '00:00' : startTime);
+			const endDays = overnight && !endsPastMidnight() ? 0 : endDayOffset;
 			const shiftedEndDate = endDate
-				? nsToDateStr(dateTimeToNs(startDate, '12:00') + endDayOffset * 24 * 60 * 60 * 1000 * NS)
+				? nsToDateStr(dateTimeToNs(startDate, '12:00') + endDays * 24 * 60 * 60 * 1000 * NS)
 				: '';
 			let endNs = shiftedEndDate
 				? dateTimeToNs(shiftedEndDate, allDay ? '23:59' : endTime)
@@ -339,16 +346,14 @@
 					{$i18n.t('Cancel')}
 				</button>
 				<button
-					class="px-3.5 py-1.5 text-sm bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full flex items-center gap-2 {loading
-						? 'cursor-not-allowed'
-						: ''}"
+					class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white disabled:cursor-not-allowed"
 					on:click={submitHandler}
 					type="button"
 					disabled={loading}
 				>
 					{event && !event.meta?.automation_id ? $i18n.t('Save') : $i18n.t('Create')}
 					{#if loading}
-						<span class="shrink-0"><Spinner /></span>
+						<span class="shrink-0"><Spinner className="size-3" /></span>
 					{/if}
 				</button>
 			</div>

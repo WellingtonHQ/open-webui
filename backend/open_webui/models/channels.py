@@ -17,6 +17,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    CheckConstraint,
     ForeignKey,
     String,
     Text,
@@ -99,7 +100,13 @@ class ChannelMember(Base):
 
     id = Column(Text, primary_key=True, unique=True)
     channel_id = Column(Text, nullable=False)
-    user_id = Column(Text, nullable=False)
+    user_id = Column(Text, nullable=True)
+    app_id = Column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint('(user_id IS NULL) <> (app_id IS NULL)', name='ck_channel_member_identity'),
+        UniqueConstraint('channel_id', 'app_id', name='uq_channel_member_app'),
+    )
 
     role = Column(Text, nullable=True)
     status = Column(Text, nullable=True)
@@ -129,7 +136,8 @@ class ChannelMemberModel(BaseModel):
 
     id: str
     channel_id: str
-    user_id: str
+    user_id: Optional[str] = None
+    app_id: Optional[str] = None
 
     role: Optional[str] = None
     status: Optional[str] = None
@@ -289,7 +297,7 @@ class ChannelTable:
         users.add(invited_by)
 
         for group_id in group_ids or []:
-            group_user_ids = await Groups.get_group_user_ids_by_id(group_id)
+            group_user_ids = await Groups.get_group_user_ids_by_id(group_id, include_inherited=True)
             users.update(group_user_ids)
 
         return users
@@ -393,7 +401,9 @@ class ChannelTable:
 
     async def get_channels_by_user_id(self, user_id: str, db: Optional[AsyncSession] = None) -> list[ChannelModel]:
         async with get_async_db_context(db) as db:
-            user_group_ids = [group.id for group in await Groups.get_groups_by_member_id(user_id, db=db)]
+            user_group_ids = [
+                group.id for group in await Groups.get_groups_by_member_id(user_id, db=db, include_inherited=True)
+            ]
 
             result = await db.execute(
                 select(Channel)
@@ -600,7 +610,7 @@ class ChannelTable:
         self, channel_id: str, db: Optional[AsyncSession] = None
     ) -> list[ChannelMemberModel]:
         async with get_async_db_context(db) as db:
-            result = await db.execute(select(ChannelMember).filter(ChannelMember.channel_id == channel_id))
+            result = await db.execute(select(ChannelMember).filter(ChannelMember.channel_id == channel_id, ChannelMember.user_id.is_not(None)))
             memberships = result.scalars().all()
             return [ChannelMemberModel.model_validate(membership) for membership in memberships]
 
@@ -686,6 +696,19 @@ class ChannelTable:
             membership = result.scalars().first()
             return membership is not None
 
+    async def is_app_channel_member(self, channel_id: str, app_id: str, db: AsyncSession | None = None) -> bool:
+        async with get_async_db_context(db) as db:
+            membership = await db.scalar(
+                select(ChannelMember.id)
+                .where(
+                    ChannelMember.channel_id == channel_id,
+                    ChannelMember.app_id == app_id,
+                    ChannelMember.is_active.is_(True),
+                )
+                .limit(1)
+            )
+            return membership is not None
+
     async def get_channel_by_id(self, id: str, db: Optional[AsyncSession] = None) -> Optional[ChannelModel]:
         try:
             async with get_async_db_context(db) as db:
@@ -737,7 +760,9 @@ class ChannelTable:
                 return []
 
             # Preload user's group membership
-            user_group_ids = [g.id for g in await Groups.get_groups_by_member_id(user_id, db=db)]
+            user_group_ids = [
+                g.id for g in await Groups.get_groups_by_member_id(user_id, db=db, include_inherited=True)
+            ]
 
             allowed_channels = []
 
@@ -813,7 +838,9 @@ class ChannelTable:
             stmt = select(Channel).filter(Channel.id == id)
 
             # Determine user groups
-            user_group_ids = [group.id for group in await Groups.get_groups_by_member_id(user_id, db=db)]
+            user_group_ids = [
+                group.id for group in await Groups.get_groups_by_member_id(user_id, db=db, include_inherited=True)
+            ]
 
             # Apply ACL rules
             stmt = self._has_permission(

@@ -18,6 +18,7 @@
 	import {
 		createNewModel,
 		deleteAllModels,
+		deleteModelById,
 		getAllModels,
 		getModelById,
 		exportModels,
@@ -90,19 +91,22 @@
 
 	let savedModels: ModelListItem[] = [];
 	let allModels: ModelListItem[] = [];
+	let availableModelIds = new Set<string>();
 
 	let filteredModels = [];
 	let selectedModelId = null;
 
 	let showManageModal = false;
 	let showResetModal = false;
+	let showDeleteModal = false;
+	let modelToDelete: ModelListItem | null = null;
 	let savingModelOrder = false;
 	let savingModelsSettings = false;
 	let modelOrderDirty = false;
 	let modelDefaultsPanel = null;
 	let modelDefaultsDirty = false;
 
-	let viewOption = '';
+	let viewOption = 'available';
 	let tags: string[] = [];
 	let selectedTag = '';
 
@@ -121,6 +125,8 @@
 
 	const isPresetModel = (model: any) =>
 		!!(model?.preset || model?.base_model_id || model?.info?.base_model_id);
+	const canResetModel = (model: ModelListItem | null) =>
+		!!model && !isPresetModel(model) && availableModelIds.has(model.id);
 	const modelTags = (model: any): string[] =>
 		(model?.meta?.tags ?? [])
 			.map((tag) => (typeof tag === 'string' ? tag : tag?.name))
@@ -156,6 +162,8 @@
 			.filter((m) => !selectedTag || modelTags(m).includes(selectedTag))
 			.filter((m) => searchValue === '' || m.name.toLowerCase().includes(searchValue.toLowerCase()))
 			.filter((m) => {
+				if (viewOption === 'available') return availableModelIds.has(m.id) || isPresetModel(m);
+				if (viewOption === 'unavailable') return !availableModelIds.has(m.id) && !isPresetModel(m);
 				if (viewOption === 'base') return !isPresetModel(m);
 				if (viewOption === 'workspace') return isPresetModel(m);
 				if (viewOption === 'enabled') return m?.is_active ?? true;
@@ -287,8 +295,8 @@
 			...allModels,
 			...providerModels.filter((model: ModelListItem) => !allModelIds.has(model.id))
 		];
-		const listedModelIds = new Set(allModels.map((model) => model.id));
-		allModels.push(...savedModels.filter((model) => !listedModelIds.has(model.id)));
+		availableModelIds = new Set(allModels.map((model) => model.id));
+		allModels.push(...savedModels.filter((model) => !availableModelIds.has(model.id)));
 
 		models = allModels.map((m: ModelListItem) => {
 			const savedModel = savedModels.find((model: ModelListItem) => model.id === m.id);
@@ -498,6 +506,10 @@
 				return null;
 			});
 
+			if (res) {
+				savedModels = [...savedModels, res];
+			}
+
 			if (res && showToast) {
 				toast.success($i18n.t('Model updated successfully'));
 				await init().catch((error) => toast.error(`${error}`));
@@ -507,8 +519,8 @@
 	};
 
 	const toggleModelHandler = async (model) => {
-		if (!Object.keys(model).includes('base_model_id') && !isPresetModel(model)) {
-			await createNewModel(localStorage.token, {
+		if (!savedModels.find((m: ModelListItem) => m.id === model.id) && !isPresetModel(model)) {
+			const res = await createNewModel(localStorage.token, {
 				id: model.id,
 				name: model.name,
 				base_model_id: null,
@@ -519,6 +531,10 @@
 			}).catch((error) => {
 				return null;
 			});
+
+			if (res) {
+				savedModels = [...savedModels, res];
+			}
 		} else {
 			await toggleModelById(localStorage.token, model.id);
 		}
@@ -530,6 +546,29 @@
 				$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
 			)
 		);
+	};
+
+	const deleteModelHandler = async (model: ModelListItem) => {
+		try {
+			// Read fresh records: visibility and access changes can create saved settings.
+			const savedModels = await getAllModels(localStorage.token);
+			if (savedModels.some((savedModel: ModelListItem) => savedModel.id === model.id)) {
+				const res = await deleteModelById(localStorage.token, model.id);
+				if (!res) {
+					toast.error($i18n.t('Failed to delete model'));
+					return;
+				}
+			}
+
+			toast.success(
+				canResetModel(model)
+					? $i18n.t('Model reset successfully')
+					: $i18n.t('Deleted {{name}}', { name: model.name })
+			);
+			await init();
+		} catch (error: any) {
+			toast.error(`${error?.detail ?? error}`);
+		}
 	};
 
 	const hideModelHandler = async (model) => {
@@ -702,6 +741,22 @@
 </script>
 
 <ConfirmDialog
+	title={canResetModel(modelToDelete) ? $i18n.t('Reset') : $i18n.t('Delete')}
+	message={canResetModel(modelToDelete)
+		? $i18n.t(
+				'This will reset the saved settings for this base model to their defaults. The model will remain available.'
+			)
+		: $i18n.t('Are you sure you want to delete **{{modelName}}**?', {
+				modelName: modelToDelete?.name
+			})}
+	confirmLabel={canResetModel(modelToDelete) ? $i18n.t('Reset') : $i18n.t('Delete')}
+	bind:show={showDeleteModal}
+	onConfirm={async () => {
+		if (modelToDelete) await deleteModelHandler(modelToDelete);
+	}}
+/>
+
+<ConfirmDialog
 	title={$i18n.t('Reset All Models')}
 	message={$i18n.t('This will delete all models including custom models and cannot be undone.')}
 	bind:show={showResetModal}
@@ -719,7 +774,7 @@
 {#if models !== null}
 	{#if selectedModelId === null}
 		<div class="flex h-full min-h-0 flex-col text-sm">
-			<div class="mb-2 flex items-center justify-between">
+			<div class="mb-0.5 flex items-center justify-between">
 				<h2 class="text-sm font-medium text-gray-900 dark:text-white">
 					{$i18n.t('settings.admin.models.title')}
 					<span class="ml-2 font-normal text-gray-500 dark:text-gray-500">
@@ -824,7 +879,7 @@
 							{/if}
 						</div>
 
-						<Dropdown align="end">
+						<Dropdown closeOnSelect align="end">
 							<Tooltip content={$i18n.t('Actions')}>
 								<button
 									class="flex h-8 items-center gap-1.5 rounded-xl bg-transparent px-1.5 text-[0.8125rem] font-normal text-gray-700 transition hover:text-gray-900 dark:text-gray-200 dark:hover:text-gray-100"
@@ -836,7 +891,7 @@
 							</Tooltip>
 
 							<div slot="content">
-								<DropdownMenu className="w-[10.625rem] shadow-sm">
+								<DropdownMenu className="min-w-[10.625rem] shadow-sm">
 									{#if $user?.role === 'admin'}
 										<button
 											class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] disabled:pointer-events-none disabled:opacity-40 hover:text-gray-900 dark:hover:text-gray-100"
@@ -1177,6 +1232,11 @@
 									<ModelMenu
 										user={$user}
 										{model}
+										deleteLabel={canResetModel(model) ? $i18n.t('Reset') : $i18n.t('Delete')}
+										deleteHandler={() => {
+											modelToDelete = model;
+											showDeleteModal = true;
+										}}
 										exportHandler={() => {
 											exportModelHandler(model);
 										}}
@@ -1247,7 +1307,7 @@
 
 				<div class="flex justify-end pt-6 text-sm font-normal">
 					<button
-						class="flex items-center gap-2 px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full disabled:cursor-not-allowed disabled:opacity-40"
+						class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white disabled:cursor-not-allowed"
 						type="button"
 						disabled={(!modelOrderDirty && !modelDefaultsDirty) ||
 							savingModelOrder ||
@@ -1259,7 +1319,7 @@
 						{$i18n.t('Save')}
 						{#if savingModelOrder || savingModelsSettings}
 							<span class="shrink-0">
-								<Spinner />
+								<Spinner className="size-3" />
 							</span>
 						{/if}
 					</button>
@@ -1268,6 +1328,7 @@
 		</div>
 	{:else}
 		<ModelEditor
+			admin
 			edit
 			model={models.find((m) => m.id === selectedModelId)}
 			preset={false}

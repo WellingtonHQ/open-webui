@@ -190,7 +190,7 @@
 				}
 
 				if (isUrlSourceId(id)) {
-					_source = { ..._source, name: id, url: id };
+					_source = { ..._source, name: metadata?.external ? _source.name : id, url: id };
 				}
 
 				const existingSource = acc.find((item) => item.id === id);

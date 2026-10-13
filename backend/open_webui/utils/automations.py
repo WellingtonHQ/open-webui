@@ -261,6 +261,13 @@ async def _execute_channel_automation(
     if not channel_id or not await Config.get('channels.enable'):
         raise ValueError('Channel not found')
 
+    from open_webui.utils.access_control import has_permission
+
+    if user.role != 'admin' and not await has_permission(
+        user.id, 'features.channels', await Config.get('user.permissions')
+    ):
+        raise ValueError('Owner no longer permitted to use channels')
+
     model = getattr(app.state, 'MODELS', {}).get(model_id, {})
     request = _build_request(app, token=token)
 
@@ -386,8 +393,13 @@ async def execute_automation(app, automation: AutomationModel) -> None:
             expires_delta = parse_duration(str(await Config.get('automations.auth_token_expires_in', '1h')))
         except ValueError:
             expires_delta = None
+        from open_webui.models.auths import Auths
+
+        auth = await Auths.get_auth_by_id(user.id)
+        if auth is None or not auth.active:
+            raise ValueError('Automation owner is no longer active')
         token = create_token(
-            data={'id': user.id, 'typ': 'automation'},
+            data={'id': user.id, 'typ': 'automation', 'session_stamp': auth.session_stamp},
             expires_delta=expires_delta or timedelta(hours=1),
         )
 
@@ -656,7 +668,7 @@ async def _check_calendar_alerts(app) -> None:
 
     for event, user_tz in upcoming:
         # Skip if already alerted for this start time
-        if event.meta and event.meta.get('alerted_at'):
+        if event.meta and event.meta.get('alerted_at') == event.start_at:
             continue
 
         # Compute minutes until event starts
@@ -687,7 +699,7 @@ async def _check_calendar_alerts(app) -> None:
         try:
             await CalendarEvents.update_event_by_id(
                 event.id,
-                CalendarEventUpdateForm(meta={'alerted_at': now_ns}),
+                CalendarEventUpdateForm(meta={'alerted_at': event.start_at}),
             )
         except Exception:
             log.debug('Failed to mark event %s as alerted', event.id, exc_info=True)
