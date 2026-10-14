@@ -641,9 +641,37 @@ def get_citation_source_from_tool_result(
             # Empty result fallback
             return []
 
-        elif tool_type in ('mcp', 'openapi'):
-            # MCP / OpenAPI tool servers (e.g. wellisearch) return markdown documents with Title:/URL: blocks.
-            # Parse them into per-URL citations so they appear in the sources UI like search_web results.
+        elif tool_name == 'search_web' and isinstance(tool_result, list):
+            # The built-in search_web tool returns JSON entries, while tool servers
+            # commonly return the markdown Title:/URL: format handled below.
+            entries = []
+            for item in tool_result:
+                if not isinstance(item, dict):
+                    continue
+                url = item.get('link') or item.get('url')
+                if not isinstance(url, str) or not url.startswith(('http://', 'https://')):
+                    continue
+                snippet = item.get('snippet') or item.get('description') or ''
+                entries.append(
+                    {
+                        'title': item.get('title') or '',
+                        'url': url,
+                        'lines': [snippet] if snippet else [],
+                    }
+                )
+            if entries:
+                label = f'{tool_id}/{tool_name}' if tool_id else tool_name
+                return _build_url_citation_sources(entries, label=label)
+            return []
+
+        elif tool_name in ('search_web', 'fetch_page', 'fetch_pages') or tool_type in (
+            'mcp',
+            'openapi',
+            'external',
+        ):
+            # MCP, OpenAPI (registered as "external"), and direct tool servers can
+            # return markdown documents with Title:/URL: blocks. Parse them into
+            # per-URL citations so model source IDs and the UI use the same URLs.
             text = tool_result if isinstance(tool_result, str) else JSONCodec.dumps(tool_result)
             return _parse_markdown_url_citations(
                 text, label=f'{tool_id}/{tool_name}' if tool_id else tool_name
@@ -1707,11 +1735,15 @@ async def chat_completion_tools_handler(
                     tool_name = f'{tool_id}/{tool_function_name}' if tool_id else f'{tool_function_name}'
 
                     parsed_sources = (
-                        _parse_markdown_url_citations(
-                            tool_result if isinstance(tool_result, str) else JSONCodec.dumps(tool_result),
-                            label=tool_name,
+                        get_citation_source_from_tool_result(
+                            tool_name=tool_function_name,
+                            tool_params=tool_function_params,
+                            tool_result=tool_result,
+                            tool_id=tool_id,
+                            tool_type=tool_type,
                         )
-                        if tool_type == 'mcp'
+                        if tool_function_name in ('search_web', 'fetch_page', 'fetch_pages')
+                        or tool_type in ('mcp', 'openapi', 'external')
                         else []
                     )
                     if parsed_sources:
@@ -3333,6 +3365,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         'spec': tool,
                         'direct': True,
                         'server': tool_server,
+                        'type': tool_server.get('type') or 'openapi',
                     }
 
         if terminal_id and terminal_capability:
@@ -6277,12 +6310,15 @@ async def streaming_chat_response_handler(response, ctx):
                                 tool_function_name
                                 in [
                                     'fetch_url',
+                                    'search_web',
+                                    'fetch_page',
+                                    'fetch_pages',
                                     'view_file',
                                     'view_knowledge_file',
                                     'query_knowledge_files',
                                     'query_chat_files',
                                 ]
-                                or tool_type in ('mcp', 'openapi')
+                                or tool_type in ('mcp', 'openapi', 'external')
                             )
                             and tool_result
                         ):
