@@ -22,7 +22,7 @@ wellington/
 ├── skills/               # OpenWebUI Skill(s) — import via Admin → Skills
 │   ├── search_the_web.md
 │   └── write_linkedin_article.md
-├── docker-compose.custom.yaml   # OpenWebUI + Docling + daily database backups
+├── docker-compose.custom.yaml   # OpenWebUI + daily database backups
 ├── backup.Dockerfile     # Python backup/restore helper image
 ├── backup.py             # SQLite backup logic and daily scheduler (runs in Docker)
 ├── backup.ps1 / backup.sh       # manual backup wrappers for Windows / Linux / macOS
@@ -262,13 +262,22 @@ Required variables (and who consumes them):
 | Variable | Used by |
 | --- | --- |
 | `WEBUI_SECRET_KEY` | OpenWebUI JWT signing; keep the same value across redeploys. Existing `SESSION_SECRET` values also work as a fallback. |
-| `DOCLING_API_KEY` | docling-server |
+| `DOCLING_API_KEY` | OpenWebUI's Docling integration; keep identical to `WellingtonHQ/infra/.env`. |
 
 ---
 
 ## Run
 
-Run from the **repo root**, passing `wellington/.env` explicitly to Docker Compose:
+Ensure the external `docling-net` network exists (create it once on a fresh Docker
+host), then start the shared Docling services from `WellingtonHQ/infra`:
+
+```powershell
+# Run once on a fresh Docker host; skip if the network already exists.
+docker network create docling-net
+docker compose --env-file ..\..\WellingtonHQ\infra\.env -f ..\..\WellingtonHQ\infra\docling\docker-compose.yml up -d
+```
+
+Then run OpenWebUI from this **repo root**, passing `wellington/.env` explicitly:
 
 ```bash
 docker compose --env-file wellington/.env -f wellington/docker-compose.custom.yaml up -d
@@ -279,10 +288,11 @@ Services started:
 | Service | Purpose |
 | --- | --- |
 | `open-webui` | the app (built from the repo-root `Dockerfile`; `build.context: ..`) |
-| `docling-server` | document conversion (PDF/DOCX → markdown) |
 | `open-webui-backup` | daily verified SQLite backups with configurable time, timezone, and retention |
 
 The in-app **web-fetch engine is `safe_web`** (set in the compose `environment`).
+The OpenWebUI container calls the Docling service at `docling-server:5001` over the
+shared `docling-net`; both stacks use the same `DOCLING_API_KEY` value.
 
 ---
 

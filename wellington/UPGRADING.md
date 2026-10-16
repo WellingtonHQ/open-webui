@@ -13,7 +13,7 @@ any `volumes:` mount on the `crawl4ai` service.
 | Service | Image | Pinned? | Upgrade notes |
 | --- | --- | --- | --- |
 | `open-webui` | built from this repo (`build: ..`) | upstream commit | 12 modified core files — use the `sync.sh`/`sync.ps1` rebase workflow, see `README.md` |
-| `docling-server` | `hwdsl2/docling-server:latest` | no | verify `DOCLING_API_KEY` + `POST /v1/convert` |
+| `docling-server` | `hwdsl2/docling-server:latest` | no | Managed by `WellingtonHQ/infra/docling/docker-compose.yml`; verify `DOCLING_API_KEY` + `POST /v1/convert` |
 | `crawl4ai` | `unclecode/crawl4ai:0.9.2` | **YES** | two **version-pinned mounts** below — must be re-verified on every bump |
 | `searxng` | `searxng/searxng:latest` | no | `settings.yml` placeholder expansion in the compose entrypoint |
 | `searxng-mcp` | `isokoliuk/mcp-searxng:latest` | no | streamable HTTP `:3000/mcp` |
@@ -125,7 +125,9 @@ output at all**. Check:
 
 ## Upgrade docling-server (`hwdsl2/docling-server`)
 
-1. Bump, `up -d docling-server`.
+1. From the WellingtonHQ/infra repository root, pull and recreate it with
+   `docker compose --env-file .env -f docling/docker-compose.yml pull docling-server`
+   followed by `docker compose --env-file .env -f docling/docker-compose.yml up -d docling-server`.
 2. Verify `POST /v1/convert` with `DOCLING_API_KEY` and that OpenWebUI's document
    pipeline still works (`DOCLING_API_URL=http://docling-server:5001/v1/convert`).
 

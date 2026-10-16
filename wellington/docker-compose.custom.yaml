@@ -19,7 +19,7 @@ services:
       - WHISPER_MODEL=base
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-${SESSION_SECRET:?Set WEBUI_SECRET_KEY or SESSION_SECRET in the Compose .env file}}
       - DO_NOT_TRACK=true
-      # Points OpenWebUI to the internal Docling service
+      # Docling is managed by WellingtonHQ/infra/docling/docker-compose.yml on the shared network.
       - DOCLING_API_URL=http://docling-server:5001/v1/convert
       - DOCLING_API_KEY=${DOCLING_API_KEY}
       - ENABLE_SEARCH_WEB_TOOL=true
@@ -27,6 +27,8 @@ services:
       - host.docker.internal:host-gateway
     mem_limit: 8G
     restart: always
+    networks:
+      - docling-net
     # GPU support:
     # Linux NVIDIA: add `runtime: nvidia` and install nvidia-container-toolkit
     # Docker Desktop: GPUs auto-exposed; no extra config needed
@@ -51,19 +53,11 @@ services:
       - open-webui
     restart: unless-stopped
 
-  # Docling Document Parser Service
-  docling-server:
-    image: hwdsl2/docling-server:latest
-    container_name: docling-server
-    restart: always
-    environment:
-      # Limits CPU threads to prevent it from starving your LLM
-      - OMP_NUM_THREADS=6
-      - DOCLING_API_KEY=${DOCLING_API_KEY}
-    mem_limit: 6G 
-    ports:
-      - "3001:5001"
-
 volumes:
   open-webui:
     external: true
+
+networks:
+  docling-net:
+    external: true
+    name: docling-net
